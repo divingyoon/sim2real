@@ -77,6 +77,11 @@ from fabrics_sim.worlds.world_mesh_model import WorldMeshesModel
 sys.path.insert(0, str(_SCRIPT_DIR))
 from fabrics_ros_interface import create_publisher
 from policy_loader import RLGamesActorPolicy
+from jtc_bridge_core import load_profile_joints
+
+DEFAULT_PROFILE = str(
+    Path.home() / "rl_ws/robot_control/src/robot_control/profiles/openarm_tesollo.yaml"
+)
 from grasp_obs_builder import (
     ACTOR_OBS_DIM,
     REAL_CUP_INDEX,
@@ -153,10 +158,25 @@ class GraspInferenceNode(Node):
         device: str = "cuda:0",
         settle_time: float = 4.0,
         object_name: str | int = REAL_CUP_INDEX,
+        profile_path: str = DEFAULT_PROFILE,
     ) -> None:
         super().__init__("grasp_inference")
         self.device = device
         self.settle_time = settle_time
+
+        # /joint_states 는 source명(openarm_right_joint*/rj_dg_*)으로 발행되므로,
+        # profile 로 source→(canonical index, sign) 매핑을 만들어 obs 순서로 읽는다.
+        _prof = load_profile_joints(profile_path)
+        self._arm_src = {}   # source_name -> (canonical_idx, sign)
+        for _i, _canon in enumerate(RIGHT_ARM_JOINT_NAMES):
+            _p = _prof.get(_canon)
+            if _p:
+                self._arm_src[_p["source"]] = (_i, _p["sign"])
+        self._hand_src = {}
+        for _i, _canon in enumerate(RIGHT_HAND_JOINT_NAMES):
+            _p = _prof.get(_canon)
+            if _p:
+                self._hand_src[_p["source"]] = (_i, _p["sign"])
 
         # ── Policy ───────────────────────────────────────────────────────────
         self.get_logger().info("Policy 로드 중...")
@@ -234,8 +254,6 @@ class GraspInferenceNode(Node):
         self._hand_ready = False
         self._cup_ready = False
 
-        self._arm_idx = {n: i for i, n in enumerate(RIGHT_ARM_JOINT_NAMES)}
-        self._hand_idx = {n: i for i, n in enumerate(RIGHT_HAND_JOINT_NAMES)}
 
         # ── 에피소드 상태 ────────────────────────────────────────────────────
         self.state = State.IDLE
@@ -273,22 +291,30 @@ class GraspInferenceNode(Node):
     # 센서 Callbacks
     # ------------------------------------------------------------------
     def _arm_cb(self, msg: JointState) -> None:
+        got = False
         for i, name in enumerate(msg.name):
-            if name in self._arm_idx:
-                idx = self._arm_idx[name]
-                self.arm_pos[idx] = msg.position[i]
+            m = self._arm_src.get(name)
+            if m is not None:
+                idx, sign = m
+                self.arm_pos[idx] = sign * msg.position[i]
                 if msg.velocity:
-                    self.arm_vel[idx] = msg.velocity[i]
-        self._arm_ready = True
+                    self.arm_vel[idx] = sign * msg.velocity[i]
+                got = True
+        if got:
+            self._arm_ready = True
 
     def _hand_cb(self, msg: JointState) -> None:
+        got = False
         for i, name in enumerate(msg.name):
-            if name in self._hand_idx:
-                idx = self._hand_idx[name]
-                self.hand_pos[idx] = msg.position[i]
+            m = self._hand_src.get(name)
+            if m is not None:
+                idx, sign = m
+                self.hand_pos[idx] = sign * msg.position[i]
                 if msg.velocity:
-                    self.hand_vel[idx] = msg.velocity[i]
-        self._hand_ready = True
+                    self.hand_vel[idx] = sign * msg.velocity[i]
+                got = True
+        if got:
+            self._hand_ready = True
 
     def _cup_cb(self, msg: PoseStamped) -> None:
         p = msg.pose.position
@@ -527,6 +553,8 @@ def main() -> None:
     parser.add_argument("--settle_time", type=float, default=4.0)
     parser.add_argument("--object", default="cup_big_s100",
                         help="잡는 물체 onehot id 또는 인덱스 (기본 cup_big_s100)")
+    parser.add_argument("--profile", default=DEFAULT_PROFILE,
+                        help="robot_control profile (source→canonical 관절 매핑)")
     args = parser.parse_args()
 
     obj: str | int
@@ -542,6 +570,7 @@ def main() -> None:
         device=args.device,
         settle_time=args.settle_time,
         object_name=obj,
+        profile_path=args.profile,
     )
     try:
         rclpy.spin(node)

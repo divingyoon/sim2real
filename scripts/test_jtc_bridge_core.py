@@ -3,7 +3,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from jtc_bridge_core import JointRemap, load_profile_joints, time_from_start_sec
+from jtc_bridge_core import (
+    JointRemap,
+    load_profile_joints,
+    safe_time_from_start,
+    time_from_start_sec,
+)
 
 # 로컬 robot_control profile (있으면 실제 매핑으로 통합 검증)
 _PROFILE = Path("/home/user/rl_ws/robot_control/src/robot_control/profiles/openarm_tesollo.yaml")
@@ -59,6 +64,35 @@ def test_time_from_start_positive():
     for bad in [(0.0, 2.0), (1 / 60, 0.0), (-1.0, 2.0)]:
         with pytest.raises(ValueError):
             time_from_start_sec(*bad)
+
+
+def test_safe_tfs_small_delta_uses_min():
+    # 작은 델타(0.01rad) → max_vel 0.5 면 0.02s 필요 < min 0.033 → min 유지
+    cur = np.zeros(7)
+    tgt = np.full(7, 0.01)
+    assert safe_time_from_start(cur, tgt, max_vel=0.5, min_tfs=0.0333) == pytest.approx(0.0333)
+
+
+def test_safe_tfs_big_jump_slows_down():
+    # 큰 점프(0.9rad) → 0.5rad/s 면 1.8s 필요 (min 0.033 무시)
+    cur = np.zeros(7)
+    tgt = np.zeros(7); tgt[3] = 0.9
+    assert safe_time_from_start(cur, tgt, max_vel=0.5, min_tfs=0.0333) == pytest.approx(1.8)
+
+
+def test_safe_tfs_uses_max_joint_displacement():
+    cur = np.zeros(3)
+    tgt = np.array([0.1, 0.6, 0.2])   # 최대 0.6
+    assert safe_time_from_start(cur, tgt, max_vel=0.3, min_tfs=0.01) == pytest.approx(2.0)
+
+
+def test_safe_tfs_shape_mismatch_and_bad_params():
+    with pytest.raises(ValueError):
+        safe_time_from_start(np.zeros(3), np.zeros(4), 0.5, 0.03)
+    with pytest.raises(ValueError):
+        safe_time_from_start(np.zeros(3), np.zeros(3), 0.0, 0.03)
+    with pytest.raises(ValueError):
+        safe_time_from_start(np.zeros(3), np.zeros(3), 0.5, 0.0)
 
 
 # ---------------------------------------------------------------------------

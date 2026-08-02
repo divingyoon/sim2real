@@ -93,3 +93,25 @@ def time_from_start_sec(control_dt: float, horizon_steps: float) -> float:
     if control_dt <= 0.0 or horizon_steps <= 0.0:
         raise ValueError("control_dt 와 horizon_steps 는 양수여야 함(0이면 JTC 무동작)")
     return float(control_dt) * float(horizon_steps)
+
+
+def safe_time_from_start(
+    current: np.ndarray,
+    target: np.ndarray,
+    max_vel: float,
+    min_tfs: float,
+) -> float:
+    """속도 한계를 넘지 않는 목표 도달 시각.
+
+    tfs = max(min_tfs, max_j |target_j - current_j| / max_vel).
+    큰 점프(pregrasp 접근 등)는 tfs↑ 로 자동 감속(속도 ≤ max_vel), 작은 정책 델타는
+    min_tfs 그대로 빠름. 어떤 명령이든 관절 속도가 max_vel 을 넘지 않아 모터를 못 퍼뜨림.
+    """
+    cur = np.asarray(current, dtype=np.float64).reshape(-1)
+    tgt = np.asarray(target, dtype=np.float64).reshape(-1)
+    if cur.shape != tgt.shape:
+        raise ValueError(f"current{cur.shape}/target{tgt.shape} 길이 불일치")
+    if max_vel <= 0.0 or min_tfs <= 0.0:
+        raise ValueError("max_vel, min_tfs 는 양수여야 함")
+    max_disp = float(np.max(np.abs(tgt - cur))) if cur.size else 0.0
+    return max(float(min_tfs), max_disp / float(max_vel))
