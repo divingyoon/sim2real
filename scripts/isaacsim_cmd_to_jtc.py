@@ -66,7 +66,6 @@ class IsaacsimCmdToJtc(Node):
         hand_topic: str,
         control_dt: float,
         max_vel: float,
-        max_follow_err: float,
         arm_state_topic: str,
         hand_state_topic: str,
     ) -> None:
@@ -76,11 +75,10 @@ class IsaacsimCmdToJtc(Node):
         self.hand_remap = JointRemap(HAND_CANON, HAND_SOURCE, prof)
         self.control_dt = float(control_dt)
         self.max_vel = float(max_vel)
-        self.max_follow_err = float(max_follow_err)
 
-        # 실제 관절 위치(source명 → pos). 위치 클램프 속도제한용.
+        # 실제 관절 위치(source명 → pos). 세트포인트 첫 초기화(점프 방지)에만 사용.
         self.actual: dict[str, float] = {}
-        # 직전 세트포인트(label→source순 위치). rate-limit 을 실제가 아닌 이 값 기준 전진.
+        # 직전 세트포인트(label→source순 위치). rate-limit 을 이 값 기준 전진(fabric_q 추종).
         self._last_setpoint: dict[str, np.ndarray] = {}
 
         self.arm_pub = self.create_publisher(JointTrajectory, arm_topic, 10)
@@ -92,8 +90,8 @@ class IsaacsimCmdToJtc(Node):
 
         self.get_logger().info(
             f"브리지 준비: arm→{arm_topic}, hand→{hand_topic}\n"
-            f"  속도제한 max_vel={self.max_vel} rad/s (세트포인트 rate-limit, time_from_start=0)\n"
-            f"  제어주기 dt={self.control_dt*1000:.1f}ms · 추종오차캡 {self.max_follow_err} rad · interpolation=none 전제\n"
+            f"  fabric_q 직접 추종 (세트포인트 rate-limit max_vel={self.max_vel} rad/s, time_from_start=0)\n"
+            f"  제어주기 dt={self.control_dt*1000:.1f}ms · interpolation=none 전제 · 실제위치 클램프 없음\n"
             f"  상태구독: {arm_state_topic}, {hand_state_topic}\n"
             f"  profile={profile_path}"
         )
@@ -107,23 +105,19 @@ class IsaacsimCmdToJtc(Node):
             self.get_logger().warn(f"{label} cmd 길이 {len(values)} != {n}, 무시")
             return
         target = remap.apply(list(values))
-        cur = [self.actual.get(src) for src in remap.output_source]
-        if any(c is None for c in cur):
-            # 실제 위치 미수신 → 세트포인트 초기화 불가. interpolation=none + tfs=0 에서
-            # 미제한 발행은 급발진이므로 상태 수신 전까지 명령 보류(안전).
-            self.get_logger().warn(
-                f"{label}: 실제 위치 미수신, 명령 보류(상태 대기)",
-                throttle_duration_sec=2.0,
-            )
-            return
-        actual = np.array(cur, dtype=np.float64)
-        # 첫 명령/상태 미보유 시 세트포인트를 실제 위치에서 시작(점프 방지).
         last = self._last_setpoint.get(label)
-        if last is None or last.shape != actual.shape:
-            last = actual
-        positions = velocity_limited_target(
-            target, last, actual, self.max_vel, self.control_dt, self.max_follow_err
-        )
+        if last is None or last.shape != target.shape:
+            # 첫 명령: 세트포인트를 실제 위치에서 시작(점프 방지). 실제 미수신이면 보류(급발진 방지).
+            cur = [self.actual.get(src) for src in remap.output_source]
+            if any(c is None for c in cur):
+                self.get_logger().warn(
+                    f"{label}: 실제 위치 미수신, 초기화 보류(상태 대기)",
+                    throttle_duration_sec=2.0,
+                )
+                return
+            last = np.array(cur, dtype=np.float64)
+        # 이후는 실제 위치와 무관하게 fabric_q(target) 를 rate-limit 로 추종 → 홀딩 토크 정상.
+        positions = velocity_limited_target(target, last, self.max_vel, self.control_dt)
         self._last_setpoint[label] = positions
         jt = JointTrajectory()
         jt.joint_names = list(remap.output_source)
@@ -147,10 +141,8 @@ def main() -> None:
     parser.add_argument("--hand-topic", default="/dg5f_right/dg5f_right_controller/joint_trajectory")
     parser.add_argument("--control-dt", type=float, default=1.0 / 60.0,
                         help="제어 주기[s]. 위치클램프 속도제한 step = max_vel·control_dt")
-    parser.add_argument("--max-vel", type=float, default=0.1,
-                        help="속도 제한 [rad/s]. 세트포인트를 매 주기 max_vel·dt 만큼 전진")
-    parser.add_argument("--max-follow-err", type=float, default=0.15,
-                        help="추종오차 캡 [rad]. 세트포인트가 실제 위치보다 이 값 넘게 앞서지 않음(급발진 방지)")
+    parser.add_argument("--max-vel", type=float, default=0.5,
+                        help="세트포인트 rate-limit [rad/s]. fabric_q 를 이 속도로 추종(큰 점프만 부드럽게)")
     parser.add_argument("--arm-state-topic", default="/joint_states")
     parser.add_argument("--hand-state-topic", default="/dg5f_right/joint_states")
     args = parser.parse_args()
@@ -162,7 +154,6 @@ def main() -> None:
         hand_topic=args.hand_topic,
         control_dt=args.control_dt,
         max_vel=args.max_vel,
-        max_follow_err=args.max_follow_err,
         arm_state_topic=args.arm_state_topic,
         hand_state_topic=args.hand_state_topic,
     )
