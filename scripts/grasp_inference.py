@@ -76,7 +76,7 @@ from fabrics_sim.worlds.world_mesh_model import WorldMeshesModel
 
 sys.path.insert(0, str(_SCRIPT_DIR))
 from fabrics_ros_interface import create_publisher
-from policy_loader import RLGamesActorPolicy
+from policy_loader import RLGamesLstmActorPolicy
 from jtc_bridge_core import load_profile_joints
 
 DEFAULT_PROFILE = str(
@@ -180,7 +180,7 @@ class GraspInferenceNode(Node):
 
         # ── Policy ───────────────────────────────────────────────────────────
         self.get_logger().info("Policy 로드 중...")
-        self.policy = RLGamesActorPolicy(
+        self.policy = RLGamesLstmActorPolicy(
             agent_yaml_path=agent_yaml,
             checkpoint_path=checkpoint_path,
             obs_dim=ACTOR_OBS_DIM,   # 114
@@ -197,7 +197,7 @@ class GraspInferenceNode(Node):
         initialize_warp("0")
         self.world_model = WorldMeshesModel(
             batch_size=1,
-            max_objects_per_env=6,
+            max_objects_per_env=8,   # grasp_v1 env_cfg fabrics_max_objects_per_env (world 객체 7개)
             device=device,
             world_filename="open_tesollo_boxes_no_table",
         )
@@ -377,6 +377,7 @@ class GraspInferenceNode(Node):
     def _reset_episode_state(self) -> None:
         self.step_count = 0
         self.last_actions = np.zeros(11)
+        self.policy.reset_states()      # LSTM hidden/cell 0으로 (sim zero_rnn_on_done 대응)
         self.finger_ctrl.reset()
         self.lift_latch.reset()
         self.lift_arm_start = None
