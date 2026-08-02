@@ -462,6 +462,14 @@ class GraspInferenceNode(Node):
         palm_center = palm_pose_6d[0, :3].cpu().numpy()
         tips = fingertip_pos[0].cpu().numpy()   # (5,3)
 
+        # [debug] RUNNING 중 palm 이 컵으로 접근하는지 검증(거리 줄면 정상 grasp)
+        _pc_dist = float(np.linalg.norm(palm_center - self.cup_pos))
+        self.get_logger().info(
+            f"[RUNNING] palm={palm_center.round(3).tolist()} "
+            f"cup={self.cup_pos.round(3).tolist()} dist={_pc_dist:.3f}m",
+            throttle_duration_sec=0.5,
+        )
+
         # 3. obs 114D
         obs_np = assemble_actor_obs(
             arm_joint_pos=self.arm_pos,
