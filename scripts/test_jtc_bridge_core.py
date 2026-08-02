@@ -8,6 +8,7 @@ from jtc_bridge_core import (
     load_profile_joints,
     safe_time_from_start,
     time_from_start_sec,
+    velocity_limited_target,
 )
 
 # 로컬 robot_control profile (있으면 실제 매핑으로 통합 검증)
@@ -93,6 +94,72 @@ def test_safe_tfs_shape_mismatch_and_bad_params():
         safe_time_from_start(np.zeros(3), np.zeros(3), 0.0, 0.03)
     with pytest.raises(ValueError):
         safe_time_from_start(np.zeros(3), np.zeros(3), 0.5, 0.0)
+
+
+# ---------------------------------------------------------------------------
+# velocity_limited_target — interpolation="none" 컨트롤러용 세트포인트 rate-limit
+# 시그니처: (target, last_setpoint, actual, max_vel, dt, max_follow_err)
+# ---------------------------------------------------------------------------
+_STEP = 0.1 * (1.0 / 60.0)   # max_vel 0.1 · dt 1/60
+
+
+def _vlt(target, last, actual, max_vel=0.1, dt=1.0 / 60.0, follow=1.0):
+    return velocity_limited_target(target, last, actual, max_vel, dt, follow)
+
+
+def test_vlt_advances_from_last_by_step():
+    # 큰 목표 → 직전 세트포인트에서 step 만큼만 전진(캡 넉넉).
+    out = _vlt(np.full(7, 0.5), np.zeros(7), np.zeros(7))
+    assert np.allclose(out, _STEP)
+
+
+def test_vlt_small_delta_reaches_target_no_overshoot():
+    # 델타가 step 이하면 목표 그대로.
+    tgt = np.array([0.0005, -0.0003, 0.0])
+    out = _vlt(tgt, np.zeros(3), np.zeros(3))
+    assert np.allclose(out, tgt)
+
+
+def test_vlt_deadlock_fix_advances_while_actual_frozen():
+    # ★핵심: 실제(actual) 가 얼어 있어도 세트포인트는 직전 기준으로 계속 전진.
+    #   (실제 기준 클램프면 두 스텝 다 actual+step 로 고정 = 교착)
+    actual = np.zeros(3)          # 팔이 정지마찰로 안 움직임
+    last = np.zeros(3)
+    out1 = _vlt(np.full(3, 1.0), last, actual, follow=1.0)
+    out2 = _vlt(np.full(3, 1.0), out1, actual, follow=1.0)
+    assert np.allclose(out1, _STEP)
+    assert np.allclose(out2, 2 * _STEP)   # 전진함 (교착 아님)
+    assert np.all(out2 > out1)
+
+
+def test_vlt_follow_err_caps_lead_over_actual():
+    # 팔이 막혀 세트포인트가 앞서가도 실제 ±follow 이내로 캡(급발진 방지).
+    out = _vlt(np.full(3, 1.0), np.full(3, 0.5), np.zeros(3), follow=0.1)
+    assert np.allclose(out, 0.1)   # 0.5+step 이지만 actual(0)+0.1 로 캡
+
+
+def test_vlt_follow_cap_both_directions():
+    out = _vlt(np.full(2, -1.0), np.full(2, -0.5), np.zeros(2), follow=0.1)
+    assert np.allclose(out, -0.1)
+
+
+def test_vlt_returns_new_array_no_mutation():
+    last = np.zeros(3)
+    tgt = np.full(3, 0.5)
+    out = _vlt(tgt, last, np.zeros(3))
+    assert out is not last and out is not tgt
+    assert np.allclose(last, 0.0)   # 입력 불변
+
+
+def test_vlt_bad_params_and_shape():
+    with pytest.raises(ValueError):
+        _vlt(np.zeros(4), np.zeros(3), np.zeros(3))          # shape 불일치
+    with pytest.raises(ValueError):
+        velocity_limited_target(np.zeros(3), np.zeros(3), np.zeros(3), 0.0, 1 / 60, 0.1)
+    with pytest.raises(ValueError):
+        velocity_limited_target(np.zeros(3), np.zeros(3), np.zeros(3), 0.1, 0.0, 0.1)
+    with pytest.raises(ValueError):
+        velocity_limited_target(np.zeros(3), np.zeros(3), np.zeros(3), 0.1, 1 / 60, 0.0)
 
 
 # ---------------------------------------------------------------------------

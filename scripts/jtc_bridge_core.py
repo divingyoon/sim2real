@@ -101,11 +101,15 @@ def safe_time_from_start(
     max_vel: float,
     min_tfs: float,
 ) -> float:
-    """속도 한계를 넘지 않는 목표 도달 시각.
+    """속도 한계를 넘지 않는 목표 도달 시각(splines 보간 컨트롤러 전용).
 
     tfs = max(min_tfs, max_j |target_j - current_j| / max_vel).
     큰 점프(pregrasp 접근 등)는 tfs↑ 로 자동 감속(속도 ≤ max_vel), 작은 정책 델타는
     min_tfs 그대로 빠름. 어떤 명령이든 관절 속도가 max_vel 을 넘지 않아 모터를 못 퍼뜨림.
+
+    ⚠️ interpolation_method="none" 컨트롤러에서는 무력하다(미래 시각 포인트가 스트림에서
+    영영 적용 안 됨, [[jtc-none-interpolation-silent-stall]]). 그 경우
+    velocity_limited_target + time_from_start=0 을 써야 한다.
     """
     cur = np.asarray(current, dtype=np.float64).reshape(-1)
     tgt = np.asarray(target, dtype=np.float64).reshape(-1)
@@ -115,3 +119,38 @@ def safe_time_from_start(
         raise ValueError("max_vel, min_tfs 는 양수여야 함")
     max_disp = float(np.max(np.abs(tgt - cur))) if cur.size else 0.0
     return max(float(min_tfs), max_disp / float(max_vel))
+
+
+def velocity_limited_target(
+    target: np.ndarray,
+    last_setpoint: np.ndarray,
+    actual: np.ndarray,
+    max_vel: float,
+    dt: float,
+    max_follow_err: float,
+) -> np.ndarray:
+    """interpolation_method="none" 컨트롤러용 rate-limited 세트포인트 생성(새 배열 반환).
+
+    세트포인트를 **직전 세트포인트(last_setpoint)**에서 target 쪽으로 매 주기 max_vel·dt 만큼
+    전진시키되, 실제 위치(actual) ±max_follow_err 이내로 캡한다. 컨트롤러는 이 세트포인트를
+    time_from_start=0 으로 즉시 적용한다. [[jtc-none-interpolation-silent-stall]]
+
+    ★ 왜 실제 위치가 아니라 직전 세트포인트 기준인가:
+    실제 위치 기준으로 ±max_vel·dt 클램프하면, 팔이 정지마찰로 아직 안 움직일 때 세트포인트도
+    실제(정지)+미세step 에 고정돼 추종오차가 절대 안 커지고 → 모터 토크가 정지마찰을 못 이겨
+    **교착**된다. 직전 세트포인트 기준으로 전진시키면 팔이 멈춰 있어도 세트포인트가 계속
+    앞서가 오차(setpoint−actual)가 커지고 → 모터가 정지마찰을 이겨 움직인다(robotctl 램프와 동일 원리).
+
+    follow_err 캡: 팔이 막혀도 세트포인트가 실제보다 max_follow_err 넘게 앞서지 않아 급발진/폭주를
+    막는다. 정상 추종 시엔 팔이 따라와 setpoint≈actual 이라 캡이 걸리지 않는다.
+    """
+    tgt = np.asarray(target, dtype=np.float64).reshape(-1)
+    last = np.asarray(last_setpoint, dtype=np.float64).reshape(-1)
+    act = np.asarray(actual, dtype=np.float64).reshape(-1)
+    if not (tgt.shape == last.shape == act.shape):
+        raise ValueError(f"target{tgt.shape}/last{last.shape}/actual{act.shape} 길이 불일치")
+    if max_vel <= 0.0 or dt <= 0.0 or max_follow_err <= 0.0:
+        raise ValueError("max_vel, dt, max_follow_err 는 양수여야 함")
+    step = float(max_vel) * float(dt)
+    advanced = last + np.clip(tgt - last, -step, step)
+    return np.clip(advanced, act - float(max_follow_err), act + float(max_follow_err))

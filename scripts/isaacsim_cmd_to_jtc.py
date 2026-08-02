@@ -10,14 +10,16 @@ robot_control 코드 무수정(Option B). robot PC(controllers 와 co-locate) �
         [--profile ~/rl_ws/robot_control/src/robot_control/profiles/openarm_tesollo.yaml] \
         [--arm-topic /right_joint_trajectory_controller/joint_trajectory] \
         [--hand-topic /dg5f_right/dg5f_right_controller/joint_trajectory] \
-        [--control-dt 0.0167] [--horizon 2.0]
+        [--control-dt 0.0167] [--max-vel 0.1]
 
 구독: /isaacsim/right_arm_cmd (Float64MultiArray, 7 canonical r_aj_1..7)
       /isaacsim/right_hand_cmd (Float64MultiArray, 20 canonical r_hj_* finger-major)
 발행: <arm-topic>, <hand-topic> (trajectory_msgs/JointTrajectory, 단일포인트)
 
-★ time_from_start = control_dt · horizon > 0 (0이면 JTC 무동작, [[jtc-none-interpolation-silent-stall]]).
-  컨트롤러가 이 시각까지 현재→목표를 보간하므로 60Hz 스트림이 부드럽게 추종된다.
+★ 컨트롤러 interpolation_method="none"(openarm_bimanual_controllers.yaml, 고주파 서보) 전제:
+  time_from_start=0 으로 목표를 **즉시 적용**하고, 속도제한은 위치 클램프
+  (velocity_limited_target, 실제 위치 ±max_vel·dt)로 한다. 미래 시각 tfs 를 주면 스트림에서
+  포인트가 영영 적용 안 돼 로봇이 전혀 안 움직인다. [[jtc-none-interpolation-silent-stall]]
 """
 
 from __future__ import annotations
@@ -36,8 +38,7 @@ from builtin_interfaces.msg import Duration
 from jtc_bridge_core import (
     JointRemap,
     load_profile_joints,
-    safe_time_from_start,
-    time_from_start_sec,
+    velocity_limited_target,
 )
 
 ARM_CANON = [f"r_aj_{i}" for i in range(1, 8)]
@@ -64,8 +65,8 @@ class IsaacsimCmdToJtc(Node):
         arm_topic: str,
         hand_topic: str,
         control_dt: float,
-        horizon: float,
         max_vel: float,
+        max_follow_err: float,
         arm_state_topic: str,
         hand_state_topic: str,
     ) -> None:
@@ -73,11 +74,14 @@ class IsaacsimCmdToJtc(Node):
         prof = load_profile_joints(profile_path)
         self.arm_remap = JointRemap(ARM_CANON, ARM_SOURCE, prof)
         self.hand_remap = JointRemap(HAND_CANON, HAND_SOURCE, prof)
-        self.min_tfs = time_from_start_sec(control_dt, horizon)
+        self.control_dt = float(control_dt)
         self.max_vel = float(max_vel)
+        self.max_follow_err = float(max_follow_err)
 
-        # 실제 관절 위치(source명 → pos). 속도 제한 tfs 계산용.
+        # 실제 관절 위치(source명 → pos). 위치 클램프 속도제한용.
         self.actual: dict[str, float] = {}
+        # 직전 세트포인트(label→source순 위치). rate-limit 을 실제가 아닌 이 값 기준 전진.
+        self._last_setpoint: dict[str, np.ndarray] = {}
 
         self.arm_pub = self.create_publisher(JointTrajectory, arm_topic, 10)
         self.hand_pub = self.create_publisher(JointTrajectory, hand_topic, 10)
@@ -88,7 +92,8 @@ class IsaacsimCmdToJtc(Node):
 
         self.get_logger().info(
             f"브리지 준비: arm→{arm_topic}, hand→{hand_topic}\n"
-            f"  속도제한 max_vel={self.max_vel} rad/s, min_tfs={self.min_tfs*1000:.1f}ms\n"
+            f"  속도제한 max_vel={self.max_vel} rad/s (세트포인트 rate-limit, time_from_start=0)\n"
+            f"  제어주기 dt={self.control_dt*1000:.1f}ms · 추종오차캡 {self.max_follow_err} rad · interpolation=none 전제\n"
             f"  상태구독: {arm_state_topic}, {hand_state_topic}\n"
             f"  profile={profile_path}"
         )
@@ -97,24 +102,34 @@ class IsaacsimCmdToJtc(Node):
         for i, name in enumerate(msg.name):
             self.actual[name] = msg.position[i]
 
-    def _safe_tfs(self, remap: JointRemap, positions: np.ndarray) -> float:
-        """실제 위치를 알면 속도 제한 tfs, 모르면 min_tfs(안전한 기본)."""
-        cur = [self.actual.get(src) for src in remap.output_source]
-        if any(c is None for c in cur):
-            return self.min_tfs   # 아직 /joint_states 미수신 → 보수적으로 min
-        return safe_time_from_start(np.array(cur), positions, self.max_vel, self.min_tfs)
-
     def _publish(self, pub, remap: JointRemap, values, n: int, label: str) -> None:
         if len(values) != n:
             self.get_logger().warn(f"{label} cmd 길이 {len(values)} != {n}, 무시")
             return
-        positions = remap.apply(list(values))
-        tfs = self._safe_tfs(remap, positions)
+        target = remap.apply(list(values))
+        cur = [self.actual.get(src) for src in remap.output_source]
+        if any(c is None for c in cur):
+            # 실제 위치 미수신 → 세트포인트 초기화 불가. interpolation=none + tfs=0 에서
+            # 미제한 발행은 급발진이므로 상태 수신 전까지 명령 보류(안전).
+            self.get_logger().warn(
+                f"{label}: 실제 위치 미수신, 명령 보류(상태 대기)",
+                throttle_duration_sec=2.0,
+            )
+            return
+        actual = np.array(cur, dtype=np.float64)
+        # 첫 명령/상태 미보유 시 세트포인트를 실제 위치에서 시작(점프 방지).
+        last = self._last_setpoint.get(label)
+        if last is None or last.shape != actual.shape:
+            last = actual
+        positions = velocity_limited_target(
+            target, last, actual, self.max_vel, self.control_dt, self.max_follow_err
+        )
+        self._last_setpoint[label] = positions
         jt = JointTrajectory()
         jt.joint_names = list(remap.output_source)
         pt = JointTrajectoryPoint()
         pt.positions = positions.tolist()
-        pt.time_from_start = _duration(tfs)
+        pt.time_from_start = _duration(0.0)   # none 보간 → 즉시 적용(미래 시각이면 무동작)
         jt.points = [pt]
         pub.publish(jt)
 
@@ -130,11 +145,12 @@ def main() -> None:
     parser.add_argument("--profile", default=DEFAULT_PROFILE)
     parser.add_argument("--arm-topic", default="/right_joint_trajectory_controller/joint_trajectory")
     parser.add_argument("--hand-topic", default="/dg5f_right/dg5f_right_controller/joint_trajectory")
-    parser.add_argument("--control-dt", type=float, default=1.0 / 60.0)
-    parser.add_argument("--horizon", type=float, default=2.0,
-                        help="최소 목표 도달 주기 수 (min_tfs = control_dt·horizon, >0)")
-    parser.add_argument("--max-vel", type=float, default=0.5,
-                        help="속도 제한 [rad/s]. 큰 명령은 이 속도 이하로 자동 감속(모터 보호)")
+    parser.add_argument("--control-dt", type=float, default=1.0 / 60.0,
+                        help="제어 주기[s]. 위치클램프 속도제한 step = max_vel·control_dt")
+    parser.add_argument("--max-vel", type=float, default=0.1,
+                        help="속도 제한 [rad/s]. 세트포인트를 매 주기 max_vel·dt 만큼 전진")
+    parser.add_argument("--max-follow-err", type=float, default=0.15,
+                        help="추종오차 캡 [rad]. 세트포인트가 실제 위치보다 이 값 넘게 앞서지 않음(급발진 방지)")
     parser.add_argument("--arm-state-topic", default="/joint_states")
     parser.add_argument("--hand-state-topic", default="/dg5f_right/joint_states")
     args = parser.parse_args()
@@ -145,8 +161,8 @@ def main() -> None:
         arm_topic=args.arm_topic,
         hand_topic=args.hand_topic,
         control_dt=args.control_dt,
-        horizon=args.horizon,
         max_vel=args.max_vel,
+        max_follow_err=args.max_follow_err,
         arm_state_topic=args.arm_state_topic,
         hand_state_topic=args.hand_state_topic,
     )
