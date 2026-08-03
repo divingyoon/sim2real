@@ -140,6 +140,7 @@ APPROACH_CMD_HZ = 10.0
 # 손 obs 방어 상수 (08.03 팔 후퇴 근본원인 대응, grasp_loop_sim 실증)
 HAND_START_MISMATCH_RAD = 0.6   # start 시 |hand - APPROACH| 허용 한계 (죽은손 thumb_2 오차=1.57)
 SENSOR_STALE_SEC = 0.5          # RUNNING 중 팔/손/컵 토픽 두절 판정 시간
+CONTACT_GATE_DIST = 0.10        # palm-컵 거리[m] 이내에서만 tip 접촉 유효(테이블 접촉 배제)
 
 
 class State(Enum):
@@ -164,11 +165,14 @@ class GraspInferenceNode(Node):
         object_name: str | int = REAL_CUP_INDEX,
         profile_path: str = DEFAULT_PROFILE,
         allow_hand_mismatch: bool = False,
+        contact_threshold: float = CONTACT_FORCE_THRESHOLD,
     ) -> None:
         super().__init__("grasp_inference")
         self.device = device
         self.settle_time = settle_time
         self.allow_hand_mismatch = allow_hand_mismatch
+        # sim 상수(0.1N)는 노이즈 없는 sim 접촉센서 기준 — 실물 F/T 노이즈/진동 위로 튜닝.
+        self.contact_threshold = float(contact_threshold)
 
         # /joint_states 는 source명(openarm_right_joint*/rj_dg_*)으로 발행되므로,
         # profile 로 source→(canonical index, sign) 매핑을 만들어 obs 순서로 읽는다.
@@ -338,7 +342,7 @@ class GraspInferenceNode(Node):
         f = np.asarray(list(data[:5]), dtype=np.float64)
         if f.shape[0] < 5:
             return np.zeros(5)
-        return (f > CONTACT_FORCE_THRESHOLD).astype(np.float64)
+        return (f > self.contact_threshold).astype(np.float64)
 
     def _tip_cb(self, msg: Float64MultiArray) -> None:
         if len(msg.data) >= 5:
@@ -529,6 +533,14 @@ class GraspInferenceNode(Node):
             throttle_duration_sec=0.5,
         )
 
+        # 2.5 접촉 유효화: 실물 tip F/T 는 **테이블 접촉도** 잡는다(sim 접촉센서는 컵-필터
+        #     쌍이라 테이블 무감지). palm 이 컵에서 멀면 접촉은 컵 유래일 수 없으므로 0 처리
+        #     — 시작 직후 거짓 lift 래치(08.03 step7, dist 0.16 에서 발동) 차단.
+        if _pc_dist < CONTACT_GATE_DIST:
+            tip_contact = self.tip_contact
+        else:
+            tip_contact = np.zeros(5)
+
         # 3. obs 114D
         obs_np = assemble_actor_obs(
             arm_joint_pos=self.arm_pos,
@@ -538,7 +550,7 @@ class GraspInferenceNode(Node):
             palm_center=palm_center,
             fingertip_pos=tips,
             cup_pos=self.cup_pos,
-            binary_contact=self.tip_contact,
+            binary_contact=tip_contact,
             last_actions=self.last_actions,
             object_onehot=self.object_onehot,
         )
@@ -551,13 +563,13 @@ class GraspInferenceNode(Node):
         finger_action = action[6:11]
 
         # 5. lift 접촉 래치 판정 (tip-only: middle/distal 은 critic 전용·제어 미사용)
-        grip = int(self.tip_contact.sum())
+        grip = int(tip_contact.sum())
         was_latched = self.lift_latch.latched
         is_lift = self.lift_latch.update(grip)
         just_entering = is_lift and not was_latched
 
         # 6. 손가락: 항상 tip-only 접촉-게이트 폐쇄 (env: 두 phase 모두 policy-controlled)
-        hand_cmd = self.finger_ctrl.step(finger_action, self.tip_contact)   # distal 미배선 → tip-only
+        hand_cmd = self.finger_ctrl.step(finger_action, tip_contact)   # distal 미배선 → tip-only
 
         # 7. 팔
         if not is_lift:
@@ -631,6 +643,8 @@ def main() -> None:
                         help="잡는 물체 onehot id 또는 인덱스 (기본 cup_big_s100)")
     parser.add_argument("--profile", default=DEFAULT_PROFILE,
                         help="robot_control profile (source→canonical 관절 매핑)")
+    parser.add_argument("--contact-threshold", type=float, default=CONTACT_FORCE_THRESHOLD,
+                        help="tip 접촉 판정 임계[N] (sim 기본 0.1 — 실물 무접촉 노이즈 위로)")
     parser.add_argument("--allow-hand-mismatch", action="store_true", default=False,
                         help="start 손 자세 sanity 게이트(APPROACH 근방 검사) 우회")
     args = parser.parse_args()
@@ -650,6 +664,7 @@ def main() -> None:
         object_name=obj,
         profile_path=args.profile,
         allow_hand_mismatch=args.allow_hand_mismatch,
+        contact_threshold=args.contact_threshold,
     )
     try:
         rclpy.spin(node)
