@@ -133,8 +133,15 @@ python3 ~/rl_ws/sim2real/scripts/head_position_hold_node.py
 ros2 launch realsense2_camera rs_launch.py align_depth.enable:=true
 # 터미널3: FP++ 컨테이너 + relay 일괄 (컨테이너 fpp_cup + /tmp/run_relay.sh detached)
 ~/rl_ws/perception_plus_plus/scripts/run_cup_pose_live.sh
-# 검증: ros2 topic echo /cup_pose --once   (base 프레임 ~8Hz; hz 확인 ros2 topic hz /cup_pose)
+# 터미널3-1: ★상태 워처 상시 유지 — 🟢 8Hz 정상 / 🔴 STALL=YOLO 검출 손실(가림·시야밖)
+python3 ~/rl_ws/sim2real/scripts/cup_pose_watch.py
+# 터미널3-2: (GUI) RGB 라이브 + 추적 오버레이 — 영상 위 초록 십자선=추적 중
+python3 ~/rl_ws/sim2real/scripts/cup_view.py
 ```
+
+- **첫 검출까지 ~50s 걸림**(실측 51s) — 그 전에 start 하면 "미수신 /cup_pose" 거부(정상).
+- 추적을 잃으면 YOLO 재검출로 재-앵커해야 재개 — 컵이 가려지면(팔 포함) 발행이 조용히
+  정지하므로 워처(🔴 STALL)로만 알 수 있다. 에피소드 중 정지 시 정책은 staleness 홀드.
 - 컵 체인(컨테이너→relay→grasp_inference)은 **전부 vision-3090 내부** → SHM 전송으로
   fastdds_wired 프로파일 유무 섞여도 통신됨(크로스머신인 팔 명령 경로만 프로파일 일치 필수).
 - 컵 배치: 오른팔 작업권 앞-우측(base 기준 x 0.35~0.45, y −0.20~0.00 권장) + 카메라 FOV 내.
@@ -169,6 +176,14 @@ python3 ~/rl_ws/sim2real/scripts/grasp_inference.py \
 ```
 
 - `tee /tmp/grasp_infer.log` 필수 — 에피소드 사후분석의 유일한 기록(joint_monitor 는 measured 만).
+- 옵션: `--episode-steps 1200`(2배 천천히, sim 기본 600) · `--log-dir`(CSV 위치) ·
+  `--contact-threshold`(tip 접촉 임계[N], 기본 sim 0.1).
+- **에피소드 사이클(b66d6b9)**: start → APPROACHING(pregrasp IK 이동) → RUNNING(grasp+lift,
+  per-step CSV `logs/grasp_ep_*.csv`: action·관절·effort·tip힘·접촉·cup·palm·명령) →
+  **PLACING**(명령 궤적 역재생 2배 감속 — 컵 제자리 반환·pregrasp 복귀) → IDLE → 재트리거.
+- start 게이트: 전 센서 1s 신선도(START_FRESH_SEC) 요구. RUNNING 두절 5s 지속 시 자동 중단.
+- tip 접촉은 palm-컵 0.10m 이내에서만 유효(CONTACT_GATE_DIST — 테이블 접촉發 거짓 lift 차단).
+  rebias 는 **팔 부착·공중 자세**에서: `ros2 service call /tip_contact/rebias std_srvs/srv/Trigger`.
 
 ### B4. 에피소드 제어
 
