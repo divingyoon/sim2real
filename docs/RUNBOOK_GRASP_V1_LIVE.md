@@ -107,6 +107,8 @@ python3 ~/rl_ws/sim2real/scripts/isaacsim_cmd_to_jtc.py --max-vel 0.1
 ```
 
 - max_vel 0.1은 후퇴 원인 아님(08.03 재현 실험으로 무죄 판정) — 그대로 시작, 추종지연 체감 시 상향.
+- 손은 `--hand-max-vel`(기본 1.0 rad/s)로 **팔과 분리** — 공용 0.1을 손에 쓰면 APPROACH 도달
+  15.7s 로 settle 게이트(수 s) 오탐 + 손가락 폐쇄가 기어감(08.03 실측 thumb_2=-0.408=0.1×4s).
 
 ### A6. 관측(권장, 매 실행 병행)
 
@@ -159,8 +161,11 @@ export ROS_DOMAIN_ID=126
 export FASTRTPS_DEFAULT_PROFILES_FILE=$HOME/fastdds_wired.xml
 python3 ~/rl_ws/sim2real/scripts/grasp_inference.py \
   --agent ~/rl_ws/hdgp/log/rl_games/open-tesol/right/grasp-v1/lstm_test3/params/agent.yaml \
-  --ckpt  ~/rl_ws/hdgp/log/rl_games/open-tesol/right/grasp-v1/lstm_test3/nn/last_open-tesol_r_grasp_v1-lstm_ep_20000_rew_9920.256.pth
+  --ckpt  ~/rl_ws/hdgp/log/rl_games/open-tesol/right/grasp-v1/lstm_test3/nn/last_open-tesol_r_grasp_v1-lstm_ep_20000_rew_9920.256.pth \
+  2>&1 | tee /tmp/grasp_infer.log
 ```
+
+- `tee /tmp/grasp_infer.log` 필수 — 에피소드 사후분석의 유일한 기록(joint_monitor 는 measured 만).
 
 ### B4. 에피소드 제어
 

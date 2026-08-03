@@ -66,6 +66,7 @@ class IsaacsimCmdToJtc(Node):
         hand_topic: str,
         control_dt: float,
         max_vel: float,
+        hand_max_vel: float,
         arm_state_topic: str,
         hand_state_topic: str,
     ) -> None:
@@ -75,6 +76,9 @@ class IsaacsimCmdToJtc(Node):
         self.hand_remap = JointRemap(HAND_CANON, HAND_SOURCE, prof)
         self.control_dt = float(control_dt)
         self.max_vel = float(max_vel)
+        # 손은 팔과 요구 속도가 다르다(경량 손가락 vs 관성 큰 팔). 공용 0.1 rad/s 를 손에도
+        # 적용하면 APPROACH -1.57 도달에 15.7s → settle 게이트(4s) 오탐 + 폐쇄가 기어감.
+        self.hand_max_vel = float(hand_max_vel)
 
         # 실제 관절 위치(source명 → pos). 세트포인트 첫 초기화(점프 방지)에만 사용.
         self.actual: dict[str, float] = {}
@@ -95,7 +99,7 @@ class IsaacsimCmdToJtc(Node):
 
         self.get_logger().info(
             f"브리지 준비: arm→{arm_topic}, hand→{hand_topic}\n"
-            f"  fabric_q 직접 추종 (세트포인트 rate-limit max_vel={self.max_vel} rad/s, time_from_start=0)\n"
+            f"  fabric_q 직접 추종 (rate-limit arm={self.max_vel} / hand={self.hand_max_vel} rad/s, time_from_start=0)\n"
             f"  제어주기 dt={self.control_dt*1000:.1f}ms · interpolation=none 전제 · 실제위치 클램프 없음\n"
             f"  상태구독: {arm_state_topic}, {hand_state_topic}\n"
             f"  profile={profile_path}"
@@ -141,7 +145,8 @@ class IsaacsimCmdToJtc(Node):
                 else:
                     last = np.array(cur, dtype=np.float64)
             # 이후는 실제 위치와 무관하게 fabric_q(target) 를 rate-limit 로 추종 → 홀딩 토크 정상.
-            positions = velocity_limited_target(target, last, self.max_vel, self.control_dt)
+            limit = self.hand_max_vel if label == "hand" else self.max_vel
+            positions = velocity_limited_target(target, last, limit, self.control_dt)
             self._last_setpoint[label] = positions
             jt = JointTrajectory()
             jt.joint_names = list(remap.output_source)
@@ -160,7 +165,9 @@ def main() -> None:
     parser.add_argument("--control-dt", type=float, default=1.0 / 60.0,
                         help="제어 주기[s]. 위치클램프 속도제한 step = max_vel·control_dt")
     parser.add_argument("--max-vel", type=float, default=0.5,
-                        help="세트포인트 rate-limit [rad/s]. fabric_q 를 이 속도로 추종(큰 점프만 부드럽게)")
+                        help="팔 세트포인트 rate-limit [rad/s]. fabric_q 를 이 속도로 추종(큰 점프만 부드럽게)")
+    parser.add_argument("--hand-max-vel", type=float, default=1.0,
+                        help="손 세트포인트 rate-limit [rad/s]. APPROACH -1.57 rad 도달 ~1.6s")
     parser.add_argument("--arm-state-topic", default="/joint_states")
     parser.add_argument("--hand-state-topic", default="/dg5f_right/joint_states")
     args = parser.parse_args()
@@ -172,6 +179,7 @@ def main() -> None:
         hand_topic=args.hand_topic,
         control_dt=args.control_dt,
         max_vel=args.max_vel,
+        hand_max_vel=args.hand_max_vel,
         arm_state_topic=args.arm_state_topic,
         hand_state_topic=args.hand_state_topic,
     )
