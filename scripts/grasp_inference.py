@@ -362,24 +362,15 @@ class GraspInferenceNode(Node):
             self.get_logger().error(response.message)
             return response
 
-        # ★손 자세 sanity 게이트: 죽은 드라이버는 전관절 0.000 을 발행한다(Modbus 두절).
-        #   zeros 손 obs = LSTM 발산(팔 후퇴, 08.03 실증). start 시점 손은 APPROACH 근방이어야
-        #   정상 — 크게 어긋난 관절을 명명하고 거부한다(--allow-hand-mismatch 로 우회).
-        _hand_err = np.abs(self.hand_pos - np.array(HAND_APPROACH_POSE))
-        _bad = [
-            (RIGHT_HAND_JOINT_NAMES[i], float(self.hand_pos[i]), float(HAND_APPROACH_POSE[i]))
-            for i in np.where(_hand_err > HAND_START_MISMATCH_RAD)[0]
-        ]
-        if _bad and not self.allow_hand_mismatch:
-            detail = ", ".join(f"{n}={v:.3f}(기대 {e:.3f})" for n, v, e in _bad[:6])
-            response.success = False
-            response.message = (
-                f"ERROR: 손 자세가 APPROACH 와 어긋남({len(_bad)}관절): {detail} — "
-                "손 드라이버 두절(전부 0.000) 의심. 전원 재인가/드라이버 재기동 후 재시도 "
-                "(의도된 자세면 --allow-hand-mismatch)"
+        # 손 자세 참고 로그: start 시점 손은 아직 APPROACH 명령 전이라 휴지 자세(0 근방)일 수
+        # 있음 — 여기선 경고만. 판별 게이트는 APPROACHING settle 종료 시(_hand_mismatch 참조,
+        # APPROACH 를 settle 동안 명령한 뒤 추종 여부로 죽은 드라이버를 확정).
+        _bad = self._hand_mismatch()
+        if _bad:
+            self.get_logger().warning(
+                f"start 시점 손 자세가 APPROACH 와 어긋남({len(_bad)}관절) — "
+                "APPROACHING 에서 명령 추종을 검사합니다"
             )
-            self.get_logger().error(response.message)
-            return response
 
         self._compute_pregrasp()
         self._reset_episode_state()
@@ -405,6 +396,19 @@ class GraspInferenceNode(Node):
         response.success = True
         response.message = "리셋 → IDLE"
         return response
+
+    def _hand_mismatch(self) -> list[tuple[str, float, float]]:
+        """|hand_pos − APPROACH| > HAND_START_MISMATCH_RAD 인 (관절명, 실측, 기대) 목록.
+
+        죽은 드라이버(Modbus 두절)는 물리 자세와 무관하게 0.000 을 발행 — APPROACH 명령 후에도
+        thumb_2(기대 −1.57)가 0 으로 남아 걸린다. 피드백이 얼면 obs 가 zeros 로 조립되어
+        LSTM 발산(팔 후퇴, 08.03 실증)이라 RUNNING 진입 금지가 안전.
+        """
+        err = np.abs(self.hand_pos - np.array(HAND_APPROACH_POSE))
+        return [
+            (RIGHT_HAND_JOINT_NAMES[i], float(self.hand_pos[i]), float(HAND_APPROACH_POSE[i]))
+            for i in np.where(err > HAND_START_MISMATCH_RAD)[0]
+        ]
 
     def _reset_episode_state(self) -> None:
         self.step_count = 0
@@ -467,6 +471,18 @@ class GraspInferenceNode(Node):
             return
         self.cmd_pub.send_right_full(self.pregrasp_arm_pos.tolist(), list(HAND_APPROACH_POSE))
         if time.monotonic() - self._approach_start_time >= self.settle_time:
+            # ★죽은 손 판별 게이트: settle 동안 APPROACH 를 명령했는데도 손 피드백이
+            #   안 따라오면(예: 물리 -1.57 인데 0.000 보고 = Modbus 피드백 동결) RUNNING 금지.
+            _bad = self._hand_mismatch()
+            if _bad and not self.allow_hand_mismatch:
+                detail = ", ".join(f"{n}={v:.3f}(기대 {e:.3f})" for n, v, e in _bad[:6])
+                self.get_logger().error(
+                    f"APPROACH 명령 {self.settle_time:.0f}s 후에도 손 피드백 미추종"
+                    f"({len(_bad)}관절): {detail} — 드라이버 피드백 두절 의심. "
+                    "손 전원 재인가/드라이버 재기동 후 재시도 (의도된 경우 --allow-hand-mismatch) → IDLE"
+                )
+                self.state = State.IDLE
+                return
             self.fabric_q[0, :NUM_ARM_DOF] = _t(self.arm_pos, self.device)
             self.fabric_q[0, NUM_ARM_DOF:] = _t(self.hand_pos, self.device)
             self.fabric_qd.zero_()
