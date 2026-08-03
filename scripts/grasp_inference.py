@@ -140,6 +140,8 @@ APPROACH_CMD_HZ = 10.0
 # 손 obs 방어 상수 (08.03 팔 후퇴 근본원인 대응, grasp_loop_sim 실증)
 HAND_START_MISMATCH_RAD = 0.6   # start 시 |hand - APPROACH| 허용 한계 (죽은손 thumb_2 오차=1.57)
 SENSOR_STALE_SEC = 0.5          # RUNNING 중 팔/손/컵 토픽 두절 판정 시간
+START_FRESH_SEC = 1.0           # start 허용 조건: 모든 센서가 이 시간 내 수신됐을 것
+STALL_ABORT_SEC = 5.0           # RUNNING 두절 홀드가 이 시간 지속되면 에피소드 자동 중단
 CONTACT_GATE_DIST = 0.10        # palm-컵 거리[m] 이내에서만 tip 접촉 유효(테이블 접촉 배제)
 
 
@@ -366,6 +368,20 @@ class GraspInferenceNode(Node):
             self.get_logger().error(response.message)
             return response
 
+        # ★신선도 게이트: "한 번이라도 수신"만 보면 묵은 컵 pose 로 start 가 통과된다
+        #   (08.03 실사고: 6분 전 pose 로 시작 → RUNNING 41s 두절 홀드 → 컵 재개 순간
+        #    예고 없이 팔이 움직임). 모든 센서가 지금 흐르고 있어야만 start 허용.
+        _now = time.monotonic()
+        _stale = [k for k, t in self._last_rx.items() if _now - t > START_FRESH_SEC]
+        if _stale:
+            response.success = False
+            response.message = (
+                f"ERROR: 토픽 신선도 불량 {_stale} (>{START_FRESH_SEC}s 무수신) — "
+                "발행 재개 확인 후 start (cup_pose_watch 🟢 확인)"
+            )
+            self.get_logger().error(response.message)
+            return response
+
         # 손 자세 참고 로그: start 시점 손은 아직 APPROACH 명령 전이라 휴지 자세(0 근방)일 수
         # 있음 — 여기선 경고만. 판별 게이트는 APPROACHING settle 종료 시(_hand_mismatch 참조,
         # APPROACH 를 settle 동안 명령한 뒤 추종 여부로 죽은 드라이버를 확정).
@@ -416,6 +432,7 @@ class GraspInferenceNode(Node):
 
     def _reset_episode_state(self) -> None:
         self.step_count = 0
+        self._stall_since = None        # RUNNING 두절 지속 시각 (STALL_ABORT_SEC 판정)
         self.last_actions = np.zeros(11)
         self.policy.reset_states()      # LSTM hidden/cell 0으로 (sim zero_rnn_on_done 대응)
         self.finger_ctrl.reset()
@@ -506,11 +523,23 @@ class GraspInferenceNode(Node):
         _now = time.monotonic()
         _stale = [k for k, t in self._last_rx.items() if _now - t > SENSOR_STALE_SEC]
         if _stale:
+            # ★무기한 홀드 금지: 두절이 길어진 뒤 센서가 재개되면 그 순간 예고 없이 로봇이
+            #   움직인다(08.03 실사고 41s 홀드→재개 순간 발진). 지속 두절은 에피소드 중단.
+            if self._stall_since is None:
+                self._stall_since = _now
+            elif _now - self._stall_since > STALL_ABORT_SEC:
+                self.get_logger().error(
+                    f"[RUNNING] 센서 두절 {_stale} {STALL_ABORT_SEC:.0f}s 지속 — 에피소드 중단 → IDLE"
+                )
+                self._stall_since = None
+                self.state = State.IDLE
+                return
             self.get_logger().error(
                 f"[RUNNING] 센서 두절 {_stale} (>{SENSOR_STALE_SEC}s) — 명령 홀드",
                 throttle_duration_sec=1.0,
             )
             return
+        self._stall_since = None
 
         # 1~2. 관측용 FK 는 **실측 관절**로 계산 (env: palm/fingertip = 로봇 측정 상태).
         #    ★fabric_q 는 여기서 실측으로 재동기화하지 않는다 — env 와 동일하게 fabric_q 는
