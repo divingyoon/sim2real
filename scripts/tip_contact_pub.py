@@ -30,7 +30,8 @@ from std_srvs.srv import Trigger
 from tip_contact_core import TipForceExtractor
 
 NUM_TIPS = 5
-DEFAULT_WRENCH_TOPIC_FMT = "/fingertip_{i}_broadcaster/wrench"
+# dg5f_right_driver.launch.py 가 ns=/dg5f_right 아래에 브로드캐스터를 스폰한다
+DEFAULT_WRENCH_TOPIC_FMT = "/dg5f_right/fingertip_{i}_broadcaster/wrench"
 
 
 class TipContactPub(Node):

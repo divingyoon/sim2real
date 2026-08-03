@@ -43,6 +43,11 @@ ros2 launch openarm_bringup openarm.bimanual.launch.py use_fake_hardware:=false
 
 ### A3. 손(dg5f) — ★Phase 1 복구 절차 포함
 
+0. **★모드 스위치/LED 확인**(delto_m_ros2/dg5f_driver/README "Before You Control" + images/manual.png):
+   ros2 드라이버는 **Developer Mode 전용** — 스위치 **②(Developer)+④(EtherNET)** 여야 함.
+   부팅 LED로 판별: 전체 LED **2회 깜빡=Developer(정상)** / 1회=Operator(잘못, Modbus 내장모드
+   — 관절정보 수신 비활성이라 GET_DATA 가 전부 0으로 옴) / 빨간 LED 깜빡=스위치·통신 이상.
+   파란 LED 켜짐=소켓 연결됨. **분리→재부착 작업 후 이 스위치부터 볼 것.**
 1. **손 전원 재인가** (Modbus 세션/펌웨어 꼬임 리셋 — 관절 0.000 고정 증상의 처방)
 2. 드라이버 기동(**F/T 브로드캐스터 포함**):
    ```bash
