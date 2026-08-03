@@ -25,6 +25,7 @@ robot_control 코드 무수정(Option B). robot PC(controllers 와 co-locate) �
 from __future__ import annotations
 
 import argparse
+import time
 from pathlib import Path
 
 import numpy as np
@@ -40,6 +41,8 @@ from jtc_bridge_core import (
     load_profile_joints,
     velocity_limited_target,
 )
+
+CMD_TIMEOUT_SEC = 1.0   # 이 시간 내 새 명령이 없으면 발행 중지(JTC 자체 홀딩·robotctl 양보)
 
 ARM_CANON = [f"r_aj_{i}" for i in range(1, 8)]
 ARM_SOURCE = [f"openarm_right_joint{i}" for i in range(1, 8)]
@@ -88,6 +91,10 @@ class IsaacsimCmdToJtc(Node):
         #   (수신 시점에 전진하면 명령 rate 가 낮을 때 — APPROACHING 10Hz — 실효 속도가
         #    max_vel×(cmd_rate×dt) 로 줄어 팔이 목표에 영영 못 도달. 08.03 실기 정체 근본원인)
         self._target: dict[str, np.ndarray] = {}
+        # 명령 스트림 최근성(label→monotonic). CMD_TIMEOUT 초과 시 발행 중지 — JTC 는 마지막
+        # 포인트를 스스로 홀딩하므로 재발행 불필요하고, 계속 쏘면 robotctl 수동조작을 매 tick
+        # 덮어버린다(08.03 "EXECUTED 인데 무동작+갑자기 움직임" 사고).
+        self._cmd_rx: dict[str, float] = {}
 
         self.arm_pub = self.create_publisher(JointTrajectory, arm_topic, 10)
         self.hand_pub = self.create_publisher(JointTrajectory, hand_topic, 10)
@@ -114,6 +121,7 @@ class IsaacsimCmdToJtc(Node):
             self.get_logger().warn(f"{label} cmd 길이 {len(values)} != {n}, 무시")
             return
         self._target[label] = remap.apply(list(values))
+        self._cmd_rx[label] = time.monotonic()
 
     def _arm_cb(self, msg: Float64MultiArray) -> None:
         self._store_target(self.arm_remap, msg.data, 7, "arm")
@@ -130,6 +138,11 @@ class IsaacsimCmdToJtc(Node):
             target = self._target.get(label)
             if target is None:
                 continue   # 첫 명령 수신 전엔 발행하지 않음
+            if time.monotonic() - self._cmd_rx.get(label, 0.0) > CMD_TIMEOUT_SEC:
+                # 정책 명령 스트림 종료 → 발행 중지(JTC 가 마지막 포인트 홀딩). 재개 시
+                # 실측 위치에서 세트포인트를 다시 시작해 robotctl 로 옮긴 자세와의 점프 방지.
+                self._last_setpoint.pop(label, None)
+                continue
             last = self._last_setpoint.get(label)
             if last is None or last.shape != target.shape:
                 # 첫 명령: 세트포인트를 실제 위치에서 시작(점프 방지).
