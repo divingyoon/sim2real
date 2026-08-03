@@ -508,16 +508,16 @@ class GraspInferenceNode(Node):
             )
             return
 
-        # 1. fabric_q 실제 관절 동기화
-        self.fabric_q[0, :NUM_ARM_DOF] = _t(self.arm_pos, self.device)
-        self.fabric_q[0, NUM_ARM_DOF:] = _t(self.hand_pos, self.device)
-        self.fabric_qd[0, :NUM_ARM_DOF] = _t(self.arm_vel, self.device)
-        self.fabric_qd[0, NUM_ARM_DOF:] = _t(self.hand_vel, self.device)
-
-        # 2. FK palm_center, fingertip_pos (Fabrics)
+        # 1~2. 관측용 FK 는 **실측 관절**로 계산 (env: palm/fingertip = 로봇 측정 상태).
+        #    ★fabric_q 는 여기서 실측으로 재동기화하지 않는다 — env 와 동일하게 fabric_q 는
+        #    영속 궤적생성기 상태(로봇이 추종할 명령)다. 매 tick 실측 동기화하면 느린 실팔
+        #    위치로 명령이 붕괴해 전진 불가(08.03 실기 RUNNING 동결 근본원인).
+        q_meas = torch.cat([
+            _t(self.arm_pos, self.device), _t(self.hand_pos, self.device)
+        ]).unsqueeze(0)
         with torch.inference_mode():
-            palm_pose_6d = self.fabric.get_palm_pose(self.fabric_q, "euler_zyx")
-            fingertip_pos = self.fabric.get_fingertip_positions(self.fabric_q)
+            palm_pose_6d = self.fabric.get_palm_pose(q_meas, "euler_zyx")
+            fingertip_pos = self.fabric.get_fingertip_positions(q_meas)
         palm_center = palm_pose_6d[0, :3].cpu().numpy()
         tips = fingertip_pos[0].cpu().numpy()   # (5,3)
 
@@ -561,12 +561,16 @@ class GraspInferenceNode(Node):
 
         # 7. 팔
         if not is_lift:
-            # Grasp phase: Δpalm → Fabrics IK
+            # Grasp phase: Δpalm → Fabrics IK (fabric_q 는 영속 상태로 적분 — env 동일)
             delta = scale_palm_delta(palm_action, self.delta_mins, self.delta_maxs)
             palm_pose = self.pregrasp_palm_pose + delta
             palm_mins_eff = np.minimum(self.palm_mins, self.pregrasp_palm_pose)
             palm_maxs_eff = np.maximum(self.palm_maxs, self.pregrasp_palm_pose)
             palm_pose = np.clip(palm_pose, palm_mins_eff, palm_maxs_eff)
+
+            # env parity: fabric_q hand 부분은 손 명령으로 동기화(FK·nullspace 용)
+            self.fabric_q[0, NUM_ARM_DOF:] = _t(hand_cmd, self.device)
+            self.fabric_qd[0, NUM_ARM_DOF:] = 0.0
 
             self.fabric.set_features(
                 torch.zeros(1, 5, device=self.device),
@@ -583,6 +587,10 @@ class GraspInferenceNode(Node):
             arm_cmd = self.fabric_q[0, :NUM_ARM_DOF].cpu().numpy()
         else:
             # Lift phase: 진입 시 캡처 → joint7-only lift-wait 선형보간
+            # (env parity: lift 중 fabric arm 상태는 실측으로 동결 — integrator 발산 방지)
+            self.fabric_q[0, :NUM_ARM_DOF] = _t(self.arm_pos, self.device)
+            self.fabric_qd[0, :NUM_ARM_DOF] = 0.0
+            self.fabric_qdd[0, :NUM_ARM_DOF] = 0.0
             if just_entering:
                 self.lift_arm_start = self.arm_pos.copy()
                 self.prelift_target = joint7_lift_wait_target(
