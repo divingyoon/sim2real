@@ -80,6 +80,10 @@ class IsaacsimCmdToJtc(Node):
         self.actual: dict[str, float] = {}
         # 직전 세트포인트(label→source순 위치). rate-limit 을 이 값 기준 전진(fabric_q 추종).
         self._last_setpoint: dict[str, np.ndarray] = {}
+        # ★최신 목표(label→source순). 콜백은 저장만 하고, 전진·발행은 고정 주기 타이머가 한다.
+        #   (수신 시점에 전진하면 명령 rate 가 낮을 때 — APPROACHING 10Hz — 실효 속도가
+        #    max_vel×(cmd_rate×dt) 로 줄어 팔이 목표에 영영 못 도달. 08.03 실기 정체 근본원인)
+        self._target: dict[str, np.ndarray] = {}
 
         self.arm_pub = self.create_publisher(JointTrajectory, arm_topic, 10)
         self.hand_pub = self.create_publisher(JointTrajectory, hand_topic, 10)
@@ -87,6 +91,7 @@ class IsaacsimCmdToJtc(Node):
         self.create_subscription(Float64MultiArray, "/isaacsim/right_hand_cmd", self._hand_cb, 10)
         self.create_subscription(JointState, arm_state_topic, self._state_cb, 20)
         self.create_subscription(JointState, hand_state_topic, self._state_cb, 20)
+        self.create_timer(self.control_dt, self._tick)
 
         self.get_logger().info(
             f"브리지 준비: arm→{arm_topic}, hand→{hand_topic}\n"
@@ -100,41 +105,51 @@ class IsaacsimCmdToJtc(Node):
         for i, name in enumerate(msg.name):
             self.actual[name] = msg.position[i]
 
-    def _publish(self, pub, remap: JointRemap, values, n: int, label: str) -> None:
+    def _store_target(self, remap: JointRemap, values, n: int, label: str) -> None:
         if len(values) != n:
             self.get_logger().warn(f"{label} cmd 길이 {len(values)} != {n}, 무시")
             return
-        target = remap.apply(list(values))
-        last = self._last_setpoint.get(label)
-        if last is None or last.shape != target.shape:
-            # 첫 명령: 세트포인트를 실제 위치에서 시작(점프 방지).
-            cur = [self.actual.get(src) for src in remap.output_source]
-            if any(c is None for c in cur):
-                # 실제 위치 미수신(예: 손 상태 로컬 DDS 수신 실패) → target 에서 초기화해
-                # 명령이 나가게 한다. 손은 첫 target 이 APPROACH(열림)라 점프가 작아 안전.
-                self.get_logger().warn(
-                    f"{label}: 실제 위치 미수신 → target 에서 세트포인트 초기화(상태없이 진행)",
-                    throttle_duration_sec=5.0,
-                )
-                last = target
-            else:
-                last = np.array(cur, dtype=np.float64)
-        # 이후는 실제 위치와 무관하게 fabric_q(target) 를 rate-limit 로 추종 → 홀딩 토크 정상.
-        positions = velocity_limited_target(target, last, self.max_vel, self.control_dt)
-        self._last_setpoint[label] = positions
-        jt = JointTrajectory()
-        jt.joint_names = list(remap.output_source)
-        pt = JointTrajectoryPoint()
-        pt.positions = positions.tolist()
-        pt.time_from_start = _duration(0.0)   # none 보간 → 즉시 적용(미래 시각이면 무동작)
-        jt.points = [pt]
-        pub.publish(jt)
+        self._target[label] = remap.apply(list(values))
 
     def _arm_cb(self, msg: Float64MultiArray) -> None:
-        self._publish(self.arm_pub, self.arm_remap, msg.data, 7, "arm")
+        self._store_target(self.arm_remap, msg.data, 7, "arm")
 
     def _hand_cb(self, msg: Float64MultiArray) -> None:
-        self._publish(self.hand_pub, self.hand_remap, msg.data, 20, "hand")
+        self._store_target(self.hand_remap, msg.data, 20, "hand")
+
+    def _tick(self) -> None:
+        """고정 주기(control_dt) 세트포인트 전진+발행 — 명령 rate 와 무관하게 max_vel 보장."""
+        for label, pub, remap in (
+            ("arm", self.arm_pub, self.arm_remap),
+            ("hand", self.hand_pub, self.hand_remap),
+        ):
+            target = self._target.get(label)
+            if target is None:
+                continue   # 첫 명령 수신 전엔 발행하지 않음
+            last = self._last_setpoint.get(label)
+            if last is None or last.shape != target.shape:
+                # 첫 명령: 세트포인트를 실제 위치에서 시작(점프 방지).
+                cur = [self.actual.get(src) for src in remap.output_source]
+                if any(c is None for c in cur):
+                    # 실제 위치 미수신(예: 손 상태 로컬 DDS 수신 실패) → target 에서 초기화해
+                    # 명령이 나가게 한다. 손은 첫 target 이 APPROACH(열림)라 점프가 작아 안전.
+                    self.get_logger().warn(
+                        f"{label}: 실제 위치 미수신 → target 에서 세트포인트 초기화(상태없이 진행)",
+                        throttle_duration_sec=5.0,
+                    )
+                    last = target
+                else:
+                    last = np.array(cur, dtype=np.float64)
+            # 이후는 실제 위치와 무관하게 fabric_q(target) 를 rate-limit 로 추종 → 홀딩 토크 정상.
+            positions = velocity_limited_target(target, last, self.max_vel, self.control_dt)
+            self._last_setpoint[label] = positions
+            jt = JointTrajectory()
+            jt.joint_names = list(remap.output_source)
+            pt = JointTrajectoryPoint()
+            pt.positions = positions.tolist()
+            pt.time_from_start = _duration(0.0)   # none 보간 → 즉시 적용(미래 시각이면 무동작)
+            jt.points = [pt]
+            pub.publish(jt)
 
 
 def main() -> None:
