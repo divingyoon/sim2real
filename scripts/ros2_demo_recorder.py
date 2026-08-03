@@ -426,11 +426,17 @@ class FabricsRightPalmFK:
         from fabrics_sim.utils.utils import initialize_warp
         from fabrics_sim.worlds.world_mesh_model import WorldMeshesModel
 
-        initialize_warp()
+        initialize_warp("pour_mimic_fk")
         self._torch = torch
         self._device = device
-        world = WorldMeshesModel(num_envs=1, max_objects_per_env=0, device=device)
-        self._fabric = OpenArmTeoslloPoseFabric(num_envs=1, world=world, use_hand_fabric=False, device=device)
+        world = WorldMeshesModel(batch_size=1, max_objects_per_env=0, device=device)
+        self._fabric = OpenArmTeoslloPoseFabric(
+            batch_size=1,
+            device=device,
+            timestep=1.0 / 300.0,
+            graph_capturable=False,
+            use_hand_fabric=False,
+        )
         self._q = torch.zeros(1, 27, dtype=torch.float32, device=device)
 
     def __call__(self, joints: np.ndarray) -> np.ndarray:
