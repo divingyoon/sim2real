@@ -137,6 +137,10 @@ CONTROL_HZ = 60.0
 PREGRASP_ORI = [math.radians(90.0), math.radians(0.0), math.radians(90.0)]
 APPROACH_CMD_HZ = 10.0
 
+# 손 obs 방어 상수 (08.03 팔 후퇴 근본원인 대응, grasp_loop_sim 실증)
+HAND_START_MISMATCH_RAD = 0.6   # start 시 |hand - APPROACH| 허용 한계 (죽은손 thumb_2 오차=1.57)
+SENSOR_STALE_SEC = 0.5          # RUNNING 중 팔/손/컵 토픽 두절 판정 시간
+
 
 class State(Enum):
     IDLE = auto()
@@ -159,10 +163,12 @@ class GraspInferenceNode(Node):
         settle_time: float = 4.0,
         object_name: str | int = REAL_CUP_INDEX,
         profile_path: str = DEFAULT_PROFILE,
+        allow_hand_mismatch: bool = False,
     ) -> None:
         super().__init__("grasp_inference")
         self.device = device
         self.settle_time = settle_time
+        self.allow_hand_mismatch = allow_hand_mismatch
 
         # /joint_states 는 source명(openarm_right_joint*/rj_dg_*)으로 발행되므로,
         # profile 로 source→(canonical index, sign) 매핑을 만들어 obs 순서로 읽는다.
@@ -243,9 +249,11 @@ class GraspInferenceNode(Node):
         self.fabric_qdd = torch.zeros(1, 27, device=device)
 
         # ── 센서 버퍼 ────────────────────────────────────────────────────────
+        # ★hand_pos 초기값 = APPROACH (zeros 금지): 손 상태 미수신 시 zeros(20) obs 가
+        #   LSTM 을 발산시켜 팔이 후퇴함 (08.03 grasp_loop_sim hand=zero 재현으로 실증).
         self.arm_pos = np.zeros(7)
         self.arm_vel = np.zeros(7)
-        self.hand_pos = np.zeros(20)
+        self.hand_pos = np.array(HAND_APPROACH_POSE, dtype=np.float64)
         self.hand_vel = np.zeros(20)
         self.cup_pos = np.zeros(3)
         self.tip_contact = np.zeros(5)   # fingertip F/T 이진 (제어에 쓰는 유일한 접촉)
@@ -253,6 +261,8 @@ class GraspInferenceNode(Node):
         self._arm_ready = False
         self._hand_ready = False
         self._cup_ready = False
+        # staleness 감시: 토픽별 마지막 수신 시각 (RUNNING 중 두절 감지)
+        self._last_rx = {"arm": 0.0, "hand": 0.0, "cup": 0.0}
 
 
         # ── 에피소드 상태 ────────────────────────────────────────────────────
@@ -302,6 +312,7 @@ class GraspInferenceNode(Node):
                 got = True
         if got:
             self._arm_ready = True
+            self._last_rx["arm"] = time.monotonic()
 
     def _hand_cb(self, msg: JointState) -> None:
         got = False
@@ -315,11 +326,13 @@ class GraspInferenceNode(Node):
                 got = True
         if got:
             self._hand_ready = True
+            self._last_rx["hand"] = time.monotonic()
 
     def _cup_cb(self, msg: PoseStamped) -> None:
         p = msg.pose.position
         self.cup_pos[:] = [p.x, p.y, p.z]
         self._cup_ready = True
+        self._last_rx["cup"] = time.monotonic()
 
     def _binary(self, data) -> np.ndarray:
         f = np.asarray(list(data[:5]), dtype=np.float64)
@@ -346,6 +359,25 @@ class GraspInferenceNode(Node):
             if not self._cup_ready:  missing.append("/cup_pose")
             response.success = False
             response.message = f"ERROR: 미수신 토픽: {missing}"
+            self.get_logger().error(response.message)
+            return response
+
+        # ★손 자세 sanity 게이트: 죽은 드라이버는 전관절 0.000 을 발행한다(Modbus 두절).
+        #   zeros 손 obs = LSTM 발산(팔 후퇴, 08.03 실증). start 시점 손은 APPROACH 근방이어야
+        #   정상 — 크게 어긋난 관절을 명명하고 거부한다(--allow-hand-mismatch 로 우회).
+        _hand_err = np.abs(self.hand_pos - np.array(HAND_APPROACH_POSE))
+        _bad = [
+            (RIGHT_HAND_JOINT_NAMES[i], float(self.hand_pos[i]), float(HAND_APPROACH_POSE[i]))
+            for i in np.where(_hand_err > HAND_START_MISMATCH_RAD)[0]
+        ]
+        if _bad and not self.allow_hand_mismatch:
+            detail = ", ".join(f"{n}={v:.3f}(기대 {e:.3f})" for n, v, e in _bad[:6])
+            response.success = False
+            response.message = (
+                f"ERROR: 손 자세가 APPROACH 와 어긋남({len(_bad)}관절): {detail} — "
+                "손 드라이버 두절(전부 0.000) 의심. 전원 재인가/드라이버 재기동 후 재시도 "
+                "(의도된 자세면 --allow-hand-mismatch)"
+            )
             self.get_logger().error(response.message)
             return response
 
@@ -447,6 +479,17 @@ class GraspInferenceNode(Node):
     # ------------------------------------------------------------------
     def _policy_loop(self) -> None:
         if self.state != State.RUNNING:
+            return
+
+        # 0. 센서 staleness 감시: 팔/손/컵 중 하나라도 두절이면 명령 홀드(전송 중단).
+        #    죽은 값으로 obs 를 조립하면 LSTM 발산(팔 후퇴) — 마지막 명령 유지가 안전.
+        _now = time.monotonic()
+        _stale = [k for k, t in self._last_rx.items() if _now - t > SENSOR_STALE_SEC]
+        if _stale:
+            self.get_logger().error(
+                f"[RUNNING] 센서 두절 {_stale} (>{SENSOR_STALE_SEC}s) — 명령 홀드",
+                throttle_duration_sec=1.0,
+            )
             return
 
         # 1. fabric_q 실제 관절 동기화
@@ -564,6 +607,8 @@ def main() -> None:
                         help="잡는 물체 onehot id 또는 인덱스 (기본 cup_big_s100)")
     parser.add_argument("--profile", default=DEFAULT_PROFILE,
                         help="robot_control profile (source→canonical 관절 매핑)")
+    parser.add_argument("--allow-hand-mismatch", action="store_true", default=False,
+                        help="start 손 자세 sanity 게이트(APPROACH 근방 검사) 우회")
     args = parser.parse_args()
 
     obj: str | int
@@ -580,6 +625,7 @@ def main() -> None:
         settle_time=args.settle_time,
         object_name=obj,
         profile_path=args.profile,
+        allow_hand_mismatch=args.allow_hand_mismatch,
     )
     try:
         rclpy.spin(node)
