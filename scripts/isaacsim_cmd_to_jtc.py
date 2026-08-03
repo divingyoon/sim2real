@@ -107,15 +107,18 @@ class IsaacsimCmdToJtc(Node):
         target = remap.apply(list(values))
         last = self._last_setpoint.get(label)
         if last is None or last.shape != target.shape:
-            # 첫 명령: 세트포인트를 실제 위치에서 시작(점프 방지). 실제 미수신이면 보류(급발진 방지).
+            # 첫 명령: 세트포인트를 실제 위치에서 시작(점프 방지).
             cur = [self.actual.get(src) for src in remap.output_source]
             if any(c is None for c in cur):
+                # 실제 위치 미수신(예: 손 상태 로컬 DDS 수신 실패) → target 에서 초기화해
+                # 명령이 나가게 한다. 손은 첫 target 이 APPROACH(열림)라 점프가 작아 안전.
                 self.get_logger().warn(
-                    f"{label}: 실제 위치 미수신, 초기화 보류(상태 대기)",
-                    throttle_duration_sec=2.0,
+                    f"{label}: 실제 위치 미수신 → target 에서 세트포인트 초기화(상태없이 진행)",
+                    throttle_duration_sec=5.0,
                 )
-                return
-            last = np.array(cur, dtype=np.float64)
+                last = target
+            else:
+                last = np.array(cur, dtype=np.float64)
         # 이후는 실제 위치와 무관하게 fabric_q(target) 를 rate-limit 로 추종 → 홀딩 토크 정상.
         positions = velocity_limited_target(target, last, self.max_vel, self.control_dt)
         self._last_setpoint[label] = positions
