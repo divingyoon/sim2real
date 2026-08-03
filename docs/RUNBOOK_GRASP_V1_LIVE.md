@@ -59,7 +59,9 @@ sudo nmcli con up vision-link && sudo nmcli con up hand-link
 ### A1. 전원 인가 후 CAN
 
 ```bash
-sudo openarm-can-configure-socketcan-4-arms can0 -fd
+sudo openarm-can-configure-socketcan-4-arms -fd
+# ★인터페이스 인자 없음 — can0~can3 내장(usage 문구는 구버전 오기). can0 넣으면 Unknown option.
+#  없는 can2 에서 not found 로 멈추는 건 무해(can0/can1 은 이미 설정됨). 확인: ip -br link show can0
 ```
 
 ### A2. 오른팔 bringup
