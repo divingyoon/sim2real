@@ -78,6 +78,7 @@ sys.path.insert(0, str(_SCRIPT_DIR))
 from fabrics_ros_interface import create_publisher
 from policy_loader import RLGamesLstmActorPolicy
 from jtc_bridge_core import load_profile_joints
+from episode_recorder import EpisodeCsvRecorder
 
 DEFAULT_PROFILE = str(
     Path.home() / "rl_ws/robot_control/src/robot_control/profiles/openarm_tesollo.yaml"
@@ -142,6 +143,7 @@ HAND_START_MISMATCH_RAD = 0.6   # start 시 |hand - APPROACH| 허용 한계 (죽
 SENSOR_STALE_SEC = 0.5          # RUNNING 중 팔/손/컵 토픽 두절 판정 시간
 START_FRESH_SEC = 1.0           # start 허용 조건: 모든 센서가 이 시간 내 수신됐을 것
 STALL_ABORT_SEC = 5.0           # RUNNING 두절 홀드가 이 시간 지속되면 에피소드 자동 중단
+REPLAY_DECIMATION = 2           # PLACING 역재생 감속(2 = 30Hz, 에피소드의 2배 느리게)
 CONTACT_GATE_DIST = 0.10        # palm-컵 거리[m] 이내에서만 tip 접촉 유효(테이블 접촉 배제)
 
 
@@ -149,6 +151,7 @@ class State(Enum):
     IDLE = auto()
     APPROACHING = auto()
     RUNNING = auto()
+    PLACING = auto()    # 에피소드 완료 후 명령 궤적 역재생(컵 제자리 반환) → IDLE
     DONE = auto()
 
 
@@ -168,6 +171,8 @@ class GraspInferenceNode(Node):
         profile_path: str = DEFAULT_PROFILE,
         allow_hand_mismatch: bool = False,
         contact_threshold: float = CONTACT_FORCE_THRESHOLD,
+        episode_steps: int = EPISODE_STEPS,
+        log_dir: str = "~/rl_ws/sim2real/logs",
     ) -> None:
         super().__init__("grasp_inference")
         self.device = device
@@ -175,6 +180,11 @@ class GraspInferenceNode(Node):
         self.allow_hand_mismatch = allow_hand_mismatch
         # sim 상수(0.1N)는 노이즈 없는 sim 접촉센서 기준 — 실물 F/T 노이즈/진동 위로 튜닝.
         self.contact_threshold = float(contact_threshold)
+        self.episode_steps = int(episode_steps)
+        self.recorder = EpisodeCsvRecorder(log_dir)
+        self._traj: list[tuple[np.ndarray, np.ndarray]] = []   # (arm_cmd, hand_cmd) — 역재생용
+        self._replay_idx = 0
+        self._replay_tick = 0
 
         # /joint_states 는 source명(openarm_right_joint*/rj_dg_*)으로 발행되므로,
         # profile 로 source→(canonical index, sign) 매핑을 만들어 obs 순서로 읽는다.
@@ -259,10 +269,13 @@ class GraspInferenceNode(Node):
         #   LSTM 을 발산시켜 팔이 후퇴함 (08.03 grasp_loop_sim hand=zero 재현으로 실증).
         self.arm_pos = np.zeros(7)
         self.arm_vel = np.zeros(7)
+        self.arm_eff = np.zeros(7)
         self.hand_pos = np.array(HAND_APPROACH_POSE, dtype=np.float64)
         self.hand_vel = np.zeros(20)
+        self.hand_eff = np.zeros(20)
         self.cup_pos = np.zeros(3)
         self.tip_contact = np.zeros(5)   # fingertip F/T 이진 (제어에 쓰는 유일한 접촉)
+        self.tip_force_raw = np.zeros(5) # 원시 힘[N] (CSV 기록용)
 
         self._arm_ready = False
         self._hand_ready = False
@@ -315,6 +328,8 @@ class GraspInferenceNode(Node):
                 self.arm_pos[idx] = sign * msg.position[i]
                 if msg.velocity:
                     self.arm_vel[idx] = sign * msg.velocity[i]
+                if msg.effort:
+                    self.arm_eff[idx] = sign * msg.effort[i]
                 got = True
         if got:
             self._arm_ready = True
@@ -329,6 +344,8 @@ class GraspInferenceNode(Node):
                 self.hand_pos[idx] = sign * msg.position[i]
                 if msg.velocity:
                     self.hand_vel[idx] = sign * msg.velocity[i]
+                if msg.effort:
+                    self.hand_eff[idx] = sign * msg.effort[i]
                 got = True
         if got:
             self._hand_ready = True
@@ -348,6 +365,7 @@ class GraspInferenceNode(Node):
 
     def _tip_cb(self, msg: Float64MultiArray) -> None:
         if len(msg.data) >= 5:
+            self.tip_force_raw = np.asarray(list(msg.data[:5]), dtype=np.float64)
             self.tip_contact = self._binary(msg.data)
 
     # ------------------------------------------------------------------
@@ -394,6 +412,8 @@ class GraspInferenceNode(Node):
 
         self._compute_pregrasp()
         self._reset_episode_state()
+        _csv = self.recorder.start()
+        self.get_logger().info(f"에피소드 CSV 기록 시작: {_csv}")
         self.state = State.APPROACHING
         self._approach_start_time = time.monotonic()
         response.success = True
@@ -405,12 +425,15 @@ class GraspInferenceNode(Node):
         return response
 
     def _stop_cb(self, request, response):
+        self.recorder.close()
+        self._traj.clear()
         self.state = State.IDLE
         response.success = True
         response.message = "중단 → IDLE"
         return response
 
     def _reset_cb(self, request, response):
+        self.recorder.close()
         self.state = State.IDLE
         self._reset_episode_state()
         response.success = True
@@ -432,6 +455,7 @@ class GraspInferenceNode(Node):
 
     def _reset_episode_state(self) -> None:
         self.step_count = 0
+        self._traj.clear()
         self._stall_since = None        # RUNNING 두절 지속 시각 (STALL_ABORT_SEC 판정)
         self.last_actions = np.zeros(11)
         self.policy.reset_states()      # LSTM hidden/cell 0으로 (sim zero_rnn_on_done 대응)
@@ -502,6 +526,7 @@ class GraspInferenceNode(Node):
                     f"({len(_bad)}관절): {detail} — 드라이버 피드백 두절 의심. "
                     "손 전원 재인가/드라이버 재기동 후 재시도 (의도된 경우 --allow-hand-mismatch) → IDLE"
                 )
+                self.recorder.close()
                 self.state = State.IDLE
                 return
             self.fabric_q[0, :NUM_ARM_DOF] = _t(self.arm_pos, self.device)
@@ -515,6 +540,9 @@ class GraspInferenceNode(Node):
     # RUNNING (60Hz)
     # ------------------------------------------------------------------
     def _policy_loop(self) -> None:
+        if self.state == State.PLACING:
+            self._placing_tick()
+            return
         if self.state != State.RUNNING:
             return
 
@@ -531,6 +559,7 @@ class GraspInferenceNode(Node):
                 self.get_logger().error(
                     f"[RUNNING] 센서 두절 {_stale} {STALL_ABORT_SEC:.0f}s 지속 — 에피소드 중단 → IDLE"
                 )
+                self.recorder.close()
                 self._stall_since = None
                 self.state = State.IDLE
                 return
@@ -650,16 +679,50 @@ class GraspInferenceNode(Node):
             )
             arm_cmd = lift_arm_interp(self.lift_arm_start, self.prelift_target, progress)
 
-        # 8. 명령 전송
+        # 8. 명령 전송 (+역재생용 궤적 기록)
         self.cmd_pub.send_right_full(arm_cmd.tolist(), hand_cmd.tolist())
+        self._traj.append((arm_cmd.copy(), np.asarray(hand_cmd, dtype=np.float64).copy()))
 
-        # 9. 스텝
+        # 8.5 CSV per-step 기록 (action·관절·모터·센서·obj)
+        self.recorder.record(
+            step=self.step_count, is_lift=is_lift, action=action,
+            arm_pos=self.arm_pos, arm_vel=self.arm_vel, arm_eff=self.arm_eff,
+            hand_pos=self.hand_pos, hand_eff=self.hand_eff,
+            tip_force=self.tip_force_raw, contact=tip_contact,
+            cup=self.cup_pos, palm=palm_center, dist=_pc_dist,
+            arm_cmd=arm_cmd, hand_cmd=hand_cmd,
+        )
+
+        # 9. 스텝 → 완료 시 역재생(PLACING)으로 컵 반환
         self.step_count += 1
-        if self.step_count >= EPISODE_STEPS:
-            self.state = State.DONE
+        if self.step_count >= self.episode_steps:
+            self.recorder.close()
+            self._replay_idx = len(self._traj) - 1
+            self._replay_tick = 0
+            self.state = State.PLACING
             self.get_logger().info(
-                f"에피소드 완료 ({EPISODE_STEPS}스텝 / {EPISODE_STEPS / CONTROL_HZ:.1f}s) → DONE"
+                f"에피소드 완료 ({self.episode_steps}스텝 / "
+                f"{self.episode_steps / CONTROL_HZ:.1f}s) → PLACING 역재생 "
+                f"({len(self._traj)}스텝 × {REPLAY_DECIMATION}배 감속, CSV={self.recorder.path})"
             )
+
+    def _placing_tick(self) -> None:
+        """에피소드 명령 궤적 역재생 — 컵을 잡은 역순으로 되돌려 제자리에 놓고 IDLE 대기.
+
+        개루프 재생(60Hz 타이머를 REPLAY_DECIMATION 으로 감속). 역순이므로 lift 하강 →
+        손가락 재개방 → pregrasp 복귀가 자연히 이뤄진다. /grasp/stop 으로 즉시 중단 가능.
+        """
+        self._replay_tick += 1
+        if self._replay_tick % REPLAY_DECIMATION != 0:
+            return
+        if self._replay_idx < 0:
+            self._traj.clear()
+            self.state = State.IDLE
+            self.get_logger().info("PLACING 완료 — 컵 반환·pregrasp 복귀 → IDLE (재트리거 대기)")
+            return
+        arm_cmd, hand_cmd = self._traj[self._replay_idx]
+        self.cmd_pub.send_right_full(arm_cmd.tolist(), hand_cmd.tolist())
+        self._replay_idx -= 1
 
 
 def main() -> None:
@@ -672,6 +735,10 @@ def main() -> None:
                         help="잡는 물체 onehot id 또는 인덱스 (기본 cup_big_s100)")
     parser.add_argument("--profile", default=DEFAULT_PROFILE,
                         help="robot_control profile (source→canonical 관절 매핑)")
+    parser.add_argument("--episode-steps", type=int, default=EPISODE_STEPS,
+                        help=f"에피소드 길이[스텝] (sim 기본 {EPISODE_STEPS}, 1200=2배 천천히)")
+    parser.add_argument("--log-dir", default="~/rl_ws/sim2real/logs",
+                        help="에피소드 CSV 저장 디렉토리")
     parser.add_argument("--contact-threshold", type=float, default=CONTACT_FORCE_THRESHOLD,
                         help="tip 접촉 판정 임계[N] (sim 기본 0.1 — 실물 무접촉 노이즈 위로)")
     parser.add_argument("--allow-hand-mismatch", action="store_true", default=False,
@@ -694,6 +761,8 @@ def main() -> None:
         profile_path=args.profile,
         allow_hand_mismatch=args.allow_hand_mismatch,
         contact_threshold=args.contact_threshold,
+        episode_steps=args.episode_steps,
+        log_dir=args.log_dir,
     )
     try:
         rclpy.spin(node)
