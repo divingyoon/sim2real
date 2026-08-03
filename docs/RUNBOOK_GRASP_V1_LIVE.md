@@ -83,21 +83,26 @@ python3 ~/rl_ws/sim2real/scripts/joint_monitor.py    # 로그 sim2real/logs/*.cs
 
 ## B. vision-3090 (`ssh vision-3090`)
 
-### B1. 컵 pose — 택1
+### B1. 컵 pose — 기본은 실컵(perception_plus_plus)
 
-(a) **fake** (플러밍/Stage A):
+(a) **실컵** (FP++ 라이브, 기본):
+```bash
+# 터미널1: 목 고정(캘리브 자세 pan -90 / tilt 280 재현 필수 — extrinsics 유효 조건)
+python3 ~/rl_ws/sim2real/scripts/head_position_hold_node.py
+# 터미널2: RealSense (카메라 점유 — 컨테이너보다 먼저)
+ros2 launch realsense2_camera rs_launch.py align_depth.enable:=true
+# 터미널3: FP++ 컨테이너 + relay 일괄 (컨테이너 fpp_cup + /tmp/run_relay.sh detached)
+~/rl_ws/perception_plus_plus/scripts/run_cup_pose_live.sh
+# 검증: ros2 topic echo /cup_pose --once   (base 프레임 ~8Hz; hz 확인 ros2 topic hz /cup_pose)
+```
+- 컵 체인(컨테이너→relay→grasp_inference)은 **전부 vision-3090 내부** → SHM 전송으로
+  fastdds_wired 프로파일 유무 섞여도 통신됨(크로스머신인 팔 명령 경로만 프로파일 일치 필수).
+- 컵 배치: 오른팔 작업권 앞-우측(base 기준 x 0.35~0.45, y −0.20~0.00 권장) + 카메라 FOV 내.
+  로그 검증: `/cup_pose` 값이 자로 잰 실측과 ~cm 수준 일치하는지 1회 확인.
+
+(b) fake (플러밍 테스트 전용):
 ```bash
 python3 ~/rl_ws/sim2real/scripts/fake_cup_pose_pub.py --x 0.40 --y -0.15 --z 0.38
-```
-
-(b) **실컵** (FP++ 라이브):
-```bash
-# 목 고정(캘리브 자세 pan -90 / tilt 280 재현 필수)
-python3 ~/rl_ws/sim2real/scripts/head_position_hold_node.py
-ros2 launch realsense2_camera rs_launch.py align_depth.enable:=true
-~/rl_ws/perception_plus_plus/scripts/run_cup_pose_live.sh
-python3 ~/rl_ws/sim2real/scripts/cup_pose_relay.py --in-type posestamped
-# 검증: ros2 topic echo /cup_pose --once  (base 프레임, ~8Hz)
 ```
 
 ### B2. (손 분리 테스트 시에만) fake 손
@@ -128,9 +133,11 @@ python3 ~/rl_ws/sim2real/scripts/grasp_inference.py \
 ros2 service call /grasp/start std_srvs/srv/Trigger    # /grasp/stop, /grasp/reset 동일
 ```
 
-**62909aa 방어 동작(정상):**
-- start 시 손 자세가 APPROACH와 0.6rad 이상 어긋나면 **관절명을 찍고 거부**
-  (= 죽은 드라이버 0.000 감지. 복구는 A3-1. 의도된 자세면 `--allow-hand-mismatch`).
+**방어 동작(62909aa+67ade46, 정상):**
+- start 시 손 자세가 APPROACH와 어긋나면 **경고만**(휴지 자세일 수 있음 — 아직 명령 전).
+- **settle 종료 시 능동 판별**: APPROACH를 settle 동안 명령한 뒤에도 피드백 미추종이면
+  (예: 물리 −1.57인데 0.000 보고 = Modbus 피드백 동결) **관절명 출력 + IDLE 복귀**.
+  복구는 A3-1(손 전원 재인가). 의도된 경우 `--allow-hand-mismatch`.
 - RUNNING 중 팔/손/컵 토픽 0.5s 두절 → `[RUNNING] 센서 두절` 로그 + **명령 홀드**.
 
 ---
@@ -144,7 +151,7 @@ ros2 service call /grasp/start std_srvs/srv/Trigger    # /grasp/stop, /grasp/res
 | goal success인데 팔 무동작 | JTC interpolation none + 미래 tfs — 브리지 최신판(tfs=0) 확인 |
 | 손 관절 전부 0.000 고정 | Modbus 세션 꼬임 — 손 전원 재인가 후 벤더 스크립트부터 |
 | start 거부(미수신 토픽) | 해당 토픽 발행 노드/DDS 확인 (`ros2 topic hz <topic>`) |
-| start 거부(손 자세 어긋남) | 정상 방어 — 손 복구 또는 `--allow-hand-mismatch` |
+| settle 후 손 미추종 → IDLE | 피드백 동결 확정(물리 자세≠보고값) — 손 전원 재인가 후 `/dg5f_right/joint_states` 실값 확인 |
 
 ## D. 오프라인 진단 도구 (로컬 pc5090)
 
