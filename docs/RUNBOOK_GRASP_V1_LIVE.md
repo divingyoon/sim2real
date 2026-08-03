@@ -17,8 +17,38 @@ export FASTRTPS_DEFAULT_PROFILES_FILE=$HOME/fastdds_wired.xml
 - ⚠️ **한 프로세스라도 프로파일을 안 물면 DDS 데이터가 단방향 불통**(discovery만 되고 콜백 0).
   의심 시 검증: `tr '\0' '\n' < /proc/<PID>/environ | grep FASTRTPS`
 - 노드/브리지 **재기동 전 옛 프로세스 pkill 필수**(중복 2대가 두 번 사고 남).
-- 유선 정적 IP: vision-3090 `192.168.100.1` ↔ 5070ti `192.168.100.2`
-  (`ip addr`는 리부트 시 소실 — nmcli 영속화 권장).
+- 유선 정적 IP: vision-3090 `192.168.100.1` ↔ 5070ti `192.168.100.2`.
+
+### 0-1. 배선/네트워크 사전검사 (★매 세션 첫 순서 — 랜 오배선 재발 방지)
+
+08.03 사고: 두 NIC 의 IP 설정이 물리 배선과 교차되어 손(169.254.186.72) 패킷이 vision 랜선으로
+나감 → 손 제어 전면 불통(코드 무죄). 확정 배선(5070ti):
+
+| NIC | 물리 연결 | IP | NM 프로파일 |
+|---|---|---|---|
+| `enp0s31f6` (메인보드) | vision-3090 직결 | 192.168.100.2/24 | `vision-link` |
+| `enxb0386cf2c43a` (USB 허브) | 손 DG-5F | 169.254.186.100/24 | `hand-link` |
+
+```bash
+bash ~/rl_ws/sim2real/scripts/net_preflight.sh   # PASS 전까지 스택 기동 금지
+```
+
+교차/IP 교차 검사 + 인터페이스 강제 ping(정방향·역방향)으로 배선 정합을 판정한다.
+NM 프로파일 영구화(1회, sudo 필요 — 아래 실행 후엔 재부팅에도 유지):
+
+```bash
+sudo nmcli con delete "Wired connection 1" "Wired connection 2"   # 교차 잔재 제거
+sudo nmcli con modify lab-link connection.id hand-link connection.autoconnect yes \
+  connection.autoconnect-priority 100 ipv4.never-default yes ipv6.method disabled
+sudo nmcli con add type ethernet ifname enp0s31f6 con-name vision-link ipv4.method manual \
+  ipv4.addresses 192.168.100.2/24 ipv4.never-default yes ipv6.method disabled \
+  connection.autoconnect yes connection.autoconnect-priority 100
+sudo nmcli con up vision-link && sudo nmcli con up hand-link
+```
+
+- USB NIC 이름 `enxb0386cf2c43a`는 MAC 유래라 포트를 옮겨도 불변(어댑터 교체 시에만 갱신 필요).
+- vision-3090 쪽 `192.168.100.1`도 동일하게 nmcli 영구화 필요(수동 `ip addr`는 재부팅 시 증발).
+- 케이블 양단 물리 라벨링 권장: "HAND-USB" / "VISION-MOBO".
 
 ---
 
