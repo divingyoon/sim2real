@@ -102,7 +102,8 @@ class IsaacsimCmdToJtc(Node):
             f"  fabric_q 직접 추종 (rate-limit arm={self.max_vel} / hand={self.hand_max_vel} rad/s, time_from_start=0)\n"
             f"  제어주기 dt={self.control_dt*1000:.1f}ms · interpolation=none 전제 · 실제위치 클램프 없음\n"
             f"  상태구독: {arm_state_topic}, {hand_state_topic}\n"
-            f"  profile={profile_path}"
+            f"  관절 매핑: {len(profile.arm_canonical)}팔 + {len(profile.ee_canonical)}EE "
+            f"({profile.arm_source[0]} … {profile.ee_source[0]})"
         )
 
     def _state_cb(self, msg: JointState) -> None:
