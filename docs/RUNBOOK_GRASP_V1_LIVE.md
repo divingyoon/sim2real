@@ -10,6 +10,27 @@
 >
 > 아래 §A(로봇)·§B(정책)는 **같은 머신(5090)** 에서 돌린다. 컵 pose 만 3090 에서 온다.
 >
+> ### s2r 1차 대상 = `grasp_sensor` (2026-08-18 결정)
+>
+> 실기 구성이 **우 DG-5F + 좌 2지 그리퍼**(`openarm_tesollo_sensor_rl`)이므로, 라이브가
+> 실제로 가능한 구성은 `grasp_sensor` 뿐이다. `grasp_v1`(bi_s, 양손 DG-5FS)은 좌 Tesollo
+> 미장착이라 오프라인 검증까지만 가능하다.
+>
+> ```
+> --robot tesollo_sensor__right     # ← 1차 대상 (실기 구성)
+> --robot tesollo_bi_s__right       # 좌손 장착 후
+> ```
+>
+> 계약(obs 154D / action 21D / 고정 홈 / 축별 palm delta)은 두 구성이 **동일**하고
+> **자산만 다르다**(Fabrics `openarm_tesollo` vs `openarm_tesollo_bi_s`, palm 6.5cm 차이).
+> 그래서 q_home 도 다르다 — 프로필을 섞어 쓰면 조용히 틀린다.
+> 구성별 계약: `docs/CONTRACT_grasp_sensor_right.md`, `docs/CONTRACT_grasp_v1_{right,left}.md`
+>
+> **★기동 전 유휴(좌)팔을 rest 자세로 두어야 한다.** sim 은 유휴 팔을 rest 로 고정한 채
+> 학습했고 그 팔은 물리 충돌체다. `/grasp/start` 가 0.15 rad 초과 시 거부한다.
+> `grasp_sensor` 좌팔 rest = `[-0.0431, -0.6706, -0.0961, +0.7342, -0.3750, -0.5678, -0.6709]`
+> (그리퍼 0.044 개방). robotctl 로 옮긴 뒤 start 할 것.
+>
 > **계약도 바뀌었다** — obs 114D→**154D**, action 11D→**21D**, 리셋은 컵 참값 pregrasp →
 > **고정 홈**. 접촉 토픽은 5D norm → **15D 3축**(`<tip_force_xyz>`).
 > 계약 전문: `docs/CONTRACT_grasp_v1_{right,left}.md`
@@ -117,7 +138,7 @@ ros2 launch openarm_bringup openarm.bimanual.launch.py use_fake_hardware:=false
 ### A4. tip 접촉 변환 노드 (★손끝 무접촉 상태에서 기동 — bias 캡처)
 
 ```bash
-python3 ~/rl_ws/sim2real/scripts/tip_contact_pub.py --robot tesollo_bi_s__right
+python3 ~/rl_ws/sim2real/scripts/tip_contact_pub.py --robot tesollo_sensor__right
 # bias 재캡처(무접촉 자세에서): ros2 service call /tip_contact/rebias std_srvs/srv/Trigger
 # 검증: ros2 topic echo /dg5f_right/tip_forces_xyz --once  → 15D(5×3), 무접촉 ~0,
 #       컵 누르면 해당 tip 3축이 움직임. (5D norm 은 /dg5f_right/contact_forces 로 병행 발행)
@@ -129,7 +150,7 @@ python3 ~/rl_ws/sim2real/scripts/tip_contact_pub.py --robot tesollo_bi_s__right
 
 ```bash
 pkill -f isaacsim_cmd_to_jtc; sleep 1
-python3 ~/rl_ws/sim2real/scripts/isaacsim_cmd_to_jtc.py --robot tesollo_bi_s__right --max-vel 0.1
+python3 ~/rl_ws/sim2real/scripts/isaacsim_cmd_to_jtc.py --robot tesollo_sensor__right --max-vel 0.1
 ```
 
 - max_vel 0.1은 후퇴 원인 아님(08.03 재현 실험으로 무죄 판정) — 그대로 시작, 추종지연 체감 시 상향.
@@ -196,10 +217,11 @@ source /opt/ros/humble/setup.bash
 source ~/grasp_infer_venv/bin/activate
 export ROS_DOMAIN_ID=126
 export FASTRTPS_DEFAULT_PROFILES_FILE=$HOME/fastdds_wired.xml
-# ⚠️ 아래 lstm_test3 경로는 존재하지 않는다 — 재학습(lstm_test2) 완료 후 갱신할 것.
+# ⚠️ 아래 lstm_test3 경로는 존재하지 않는다.
+#    현행 대상 = log/rl_games/open-tesol/right/grasp-sensor/lstm_test1 (학습 중, 로컬 5090)
 python3 ~/rl_ws/sim2real/scripts/grasp_inference.py \
-  --robot tesollo_bi_s__right \
-  --agent <재학습 run>/params/agent.yaml \
+  --robot tesollo_sensor__right \
+  --agent <grasp-sensor run>/params/agent.yaml \
   --ckpt  <재학습 run>/nn/<최종>.pth \
   2>&1 | tee /tmp/grasp_infer.log
 ```
