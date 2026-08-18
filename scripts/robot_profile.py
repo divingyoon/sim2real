@@ -240,6 +240,28 @@ def load_robot_profile(name_or_path: str | Path) -> RobotProfile:
     )
 
 
+def load_hdgp_module(profile: RobotProfile, suffix: str):
+    """구성에 대응하는 hdgp 모듈을 import 한다 (`preset` / `constants` / `utils`).
+
+    하드코딩된 자세·상수를 배포에 복제하지 않기 위한 통로다. 복제하면 sim 이 값을
+    바꿨을 때 조용히 어긋난다 — 좌우 미러 자세가 특히 그렇다.
+
+        preset = load_hdgp_module(profile, "preset")
+        preset.HAND_APPROACH_POSE      # side 에 맞는 20D 자세
+    """
+    import importlib
+    import sys
+
+    if not HDGP_OPENARM_SRC.exists():
+        raise FileNotFoundError(
+            f"hdgp 소스가 없어 {suffix} 를 불러올 수 없다: {HDGP_OPENARM_SRC}"
+        )
+    if str(HDGP_OPENARM_SRC) not in sys.path:
+        sys.path.insert(0, str(HDGP_OPENARM_SRC))
+    side = profile.acting_side
+    return importlib.import_module(f"{profile.contract.hdgp_package}.grasp_{side}_{suffix}")
+
+
 def ee_limit_arrays(profile: RobotProfile):
     """EE canonical 순서의 (lower, upper) numpy 배열 — 손가락 지령 clamp 주입용."""
     import numpy as np
