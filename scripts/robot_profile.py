@@ -69,6 +69,11 @@ class RobotProfile:
     ee_canonical: tuple[str, ...]
     arm_source: tuple[str, ...]
     ee_source: tuple[str, ...]
+    # 유휴(반대편) 팔 — 명령하지는 않지만 **자세를 확인**해야 한다.
+    # sim 은 유휴 팔을 rest 로 고정한 채 학습하고 그 팔은 물리 충돌체로 존재한다.
+    # 실기 유휴 팔이 다른 곳에 있으면 장면이 달라져 학습된 궤적이 안전하지 않다.
+    idle_arm_canonical: tuple[str, ...]
+    idle_arm_source: tuple[str, ...]
     joint_limits: dict[str, dict]       # canonical → {source, sign, lower, upper, unit}
     tip_force_sign: float
 
@@ -129,7 +134,10 @@ def load_manifest_joint_order(manifest_path: Path) -> list[str]:
 
 
 def _side_joints(order: list[str], side: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """매니페스트 순서에서 해당 side 의 (팔 7, EE) canonical 을 순서 그대로 뽑는다."""
+    """매니페스트 순서에서 해당 side 의 (팔 7, EE) canonical 을 순서 그대로 뽑는다.
+
+    EE 는 구성마다 다르다(Tesollo 20 / 2지 그리퍼 1~2) — 개수를 강요하지 않는다.
+    """
     p = _SIDE_PREFIX[side]
     arm = tuple(j for j in order if j.startswith(f"{p}_aj_"))
     ee = tuple(j for j in order if j.startswith(f"{p}_hj_"))
@@ -138,6 +146,19 @@ def _side_joints(order: list[str], side: str) -> tuple[tuple[str, ...], tuple[st
     if not ee:
         raise ValueError(f"매니페스트에 {side} EE 관절({p}_hj_*)이 없음")
     return arm, ee
+
+
+def idle_arm_rest_pose(profile: "RobotProfile") -> list[float]:
+    """유휴 팔의 rest 자세(7,) — preset 의 `{반대편}_ARM_REST_JOINT_POS`.
+
+    sim 은 이 자세로 유휴 팔을 고정한 채 학습한다. 실기도 같아야 장면이 일치한다.
+    """
+    preset = load_hdgp_module(profile, "preset")
+    other = "LEFT" if profile.acting_side == "right" else "RIGHT"
+    rest = getattr(preset, f"{other}_ARM_REST_JOINT_POS", None)
+    if rest is None:
+        raise AttributeError(f"preset 에 {other}_ARM_REST_JOINT_POS 가 없다")
+    return [float(rest[j]) for j in profile.idle_arm_canonical]
 
 
 HDGP_OPENARM_SRC = WS_ROOT / "hdgp" / "source" / "openarm"
@@ -207,8 +228,11 @@ def load_robot_profile(name_or_path: str | Path) -> RobotProfile:
             f"{len(ee_canonical)}개 ({manifest_path.name})"
         )
 
+    idle_side = "left" if side == "right" else "right"
+    idle_arm, _ = _side_joints(order, idle_side)
+
     limits = load_joint_profiles(d["joint_profiles"])
-    missing = [j for j in (*arm_canonical, *ee_canonical) if j not in limits]
+    missing = [j for j in (*arm_canonical, *ee_canonical, *idle_arm) if j not in limits]
     if missing:
         raise ValueError(
             f"{path}: joint profile 에 없는 관절 {len(missing)}개 — {missing[:6]}"
@@ -236,6 +260,8 @@ def load_robot_profile(name_or_path: str | Path) -> RobotProfile:
         ee_canonical=ee_canonical,
         arm_source=tuple(limits[j]["source"] for j in arm_canonical),
         ee_source=tuple(limits[j]["source"] for j in ee_canonical),
+        idle_arm_canonical=idle_arm,
+        idle_arm_source=tuple(limits[j]["source"] for j in idle_arm),
         joint_limits=limits,
         tip_force_sign=float(d.get("tip_sensor", {}).get("force_sign", 1.0)),
     )

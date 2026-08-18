@@ -77,7 +77,7 @@ from policy_loader import RLGamesLstmActorPolicy
 from episode_recorder import EpisodeCsvRecorder
 from grasp_obs_builder import REAL_CUP_INDEX, make_object_onehot
 from grasp_policy_core import GraspPolicyCore, TickSensors
-from robot_profile import load_hdgp_module, load_robot_profile
+from robot_profile import idle_arm_rest_pose, load_hdgp_module, load_robot_profile
 
 # 계약 상수·자세는 **구성 프로필**을 통해 hdgp 에서 해석한다(값 복제 금지).
 # 복제하면 sim 이 바꿨을 때 조용히 어긋나고, 좌우 미러 자세가 특히 그렇다.
@@ -93,6 +93,7 @@ START_FRESH_SEC = 1.0           # start 허용: 모든 센서가 이 시간 내 
 STALL_ABORT_SEC = 5.0           # 두절 홀드가 이 시간 지속되면 에피소드 자동 중단
 REPLAY_DECIMATION = 2           # PLACING 역재생 감속(2 = 30Hz)
 CONTACT_GATE_DIST = 0.10        # palm-컵 거리[m] 이내에서만 tip 접촉 유효(테이블 접촉 배제)
+IDLE_ARM_MISMATCH_RAD = 0.15    # 유휴(반대편) 팔이 rest 에서 벗어난 허용 한계
 
 
 class State(Enum):
@@ -115,6 +116,7 @@ class GraspInferenceNode(Node):
         settle_time: float = 4.0,
         object_name: str | int | None = None,
         allow_hand_mismatch: bool = False,
+        allow_idle_arm_mismatch: bool = False,
         contact_threshold: float | None = None,
         episode_steps: int | None = None,
         log_dir: str = "~/rl_ws/sim2real/logs",
@@ -123,6 +125,7 @@ class GraspInferenceNode(Node):
         self.device = device
         self.settle_time = settle_time
         self.allow_hand_mismatch = allow_hand_mismatch
+        self.allow_idle_arm_mismatch = allow_idle_arm_mismatch
         self.recorder = EpisodeCsvRecorder(log_dir)
         self._traj: list[tuple[np.ndarray, np.ndarray]] = []   # (arm_cmd, hand_cmd) — 역재생용
         self._replay_idx = 0
@@ -157,6 +160,16 @@ class GraspInferenceNode(Node):
             _lim[c]["source"]: (i, _lim[c]["sign"])
             for i, c in enumerate(self.profile.ee_canonical)
         }
+        # 유휴(반대편) 팔 — 명령하지 않고 **자세만 확인**한다. sim 은 유휴 팔을 rest 로
+        # 고정한 채 학습하고 그 팔은 물리 충돌체다. 실기가 다른 곳에 있으면 학습된 궤적이
+        # 안전하지 않다(특히 이 로봇은 양팔이 같은 작업공간을 공유한다).
+        self._idle_src = {
+            _lim[c]["source"]: (i, _lim[c]["sign"])
+            for i, c in enumerate(self.profile.idle_arm_canonical)
+        }
+        self.idle_arm_rest = np.asarray(idle_arm_rest_pose(self.profile), dtype=np.float64)
+        self.idle_arm_pos = self.idle_arm_rest.copy()   # 미수신 시 "정상" 가정 금지용 초기값
+        self._idle_ready = False
 
         # ── Policy ───────────────────────────────────────────────────────────
         self.get_logger().info("Policy 로드 중...")
@@ -242,6 +255,10 @@ class GraspInferenceNode(Node):
     def _arm_cb(self, msg: JointState) -> None:
         got = False
         for i, name in enumerate(msg.name):
+            idle = self._idle_src.get(name)
+            if idle is not None:
+                self.idle_arm_pos[idle[0]] = idle[1] * msg.position[i]
+                self._idle_ready = True
             m = self._arm_src.get(name)
             if m is not None:
                 idx, sign = m
@@ -339,6 +356,26 @@ class GraspInferenceNode(Node):
                 "APPROACHING 에서 명령 추종을 검사합니다"
             )
 
+        # ★유휴 팔 자세 확인: sim 은 유휴 팔을 rest 로 고정한 채 학습했고 그 팔은 물리
+        #   충돌체다. 실기가 다른 곳에 있으면 학습된 궤적이 안전하지 않다.
+        if not self._idle_ready:
+            self.get_logger().warning(
+                f"유휴 팔({self.profile.idle_arm_canonical[0][:1]}_aj_*) 상태 미수신 — "
+                "자세를 확인할 수 없다. 브링업이 양팔을 올렸는지 점검하라."
+            )
+        _idle_bad = self._idle_arm_mismatch()
+        if _idle_bad and not self.allow_idle_arm_mismatch:
+            detail = ", ".join(f"{n}={v:+.3f}(기대 {e:+.3f})" for n, v, e in _idle_bad[:7])
+            response.success = False
+            response.message = (
+                f"ERROR: 유휴 팔이 rest 에서 벗어남({len(_idle_bad)}관절): {detail}\n"
+                "  sim 은 이 팔을 rest 에 고정한 채 학습했다 — 다른 자세면 파지 팔 궤적이"
+                " 학습 때 없던 장애물을 만난다.\n"
+                f"  robotctl 등으로 rest 로 옮긴 뒤 재시도 (의도된 경우 --allow-idle-arm-mismatch)"
+            )
+            self.get_logger().error(response.message)
+            return response
+
         self._reset_episode_state()
         _csv = self.recorder.start()
         self.get_logger().info(f"에피소드 CSV 기록 시작: {_csv}")
@@ -379,6 +416,21 @@ class GraspInferenceNode(Node):
         return [
             (self.hand_joint_names[i], float(self.hand_pos[i]), float(self.hand_approach[i]))
             for i in np.where(err > HAND_START_MISMATCH_RAD)[0]
+        ]
+
+    def _idle_arm_mismatch(self) -> list[tuple[str, float, float]]:
+        """유휴 팔이 rest 에서 벗어난 (관절명, 실측, 기대) 목록.
+
+        sim 학습 장면은 유휴 팔이 rest 에 있는 상태다. 실기가 다르면 파지 팔의 궤적이
+        학습 때 없던 물체(반대편 팔)를 만난다 — 조용히 넘어가면 충돌로 나타난다.
+        """
+        if not self._idle_ready:
+            return []          # 미수신은 별도 게이트(_idle_ready)에서 다룬다
+        err = np.abs(self.idle_arm_pos - self.idle_arm_rest)
+        return [
+            (self.profile.idle_arm_canonical[i], float(self.idle_arm_pos[i]),
+             float(self.idle_arm_rest[i]))
+            for i in np.where(err > IDLE_ARM_MISMATCH_RAD)[0]
         ]
 
     def _reset_episode_state(self) -> None:
@@ -551,6 +603,8 @@ def main() -> None:
                         help="tip 접촉 판정 임계[N]. 기본은 sim 계약(0.1) — 실물 노이즈 위로 튜닝")
     parser.add_argument("--allow-hand-mismatch", action="store_true", default=False,
                         help="settle 후 손 피드백 추종 게이트 우회")
+    parser.add_argument("--allow-idle-arm-mismatch", action="store_true", default=False,
+                        help="유휴(반대편) 팔 rest 자세 확인 게이트 우회")
     args = parser.parse_args()
 
     obj: str | int
@@ -568,6 +622,7 @@ def main() -> None:
         settle_time=args.settle_time,
         object_name=obj,
         allow_hand_mismatch=args.allow_hand_mismatch,
+        allow_idle_arm_mismatch=args.allow_idle_arm_mismatch,
         contact_threshold=args.contact_threshold,
         episode_steps=args.episode_steps,
         log_dir=args.log_dir,

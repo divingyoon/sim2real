@@ -13,6 +13,7 @@ import re
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 import yaml
 
@@ -127,7 +128,7 @@ def test_fabrics_asset_matches_sim(name):
     """
     p = load_robot_profile(name)
     sim_assets = _sim_fabrics_assets(p)
-    assert sim_assets, f"{side} env 에서 robot_dir_name 을 찾지 못함"
+    assert sim_assets, f"{name} env 에서 robot_dir_name 을 찾지 못함"
     assert p.fabrics.robot_dir in sim_assets, (
         f"Fabrics 자산 불일치 [{name}]: 프로필 {p.fabrics.robot_dir!r} vs sim {sorted(sim_assets)}\n"
         "  bi_s(DG-5FS) 와 openarm_tesollo(DG-5F) 는 palm 이 6.5cm 다르다 — 구성별로 맞춰야 한다."
@@ -203,3 +204,50 @@ def test_joint_profile_duplicate_identical_ok(tmp_path):
     a.write_text(yaml.safe_dump({"joints": [base]}))
     merged = load_joint_profiles([a, a])
     assert merged["r_aj_1"]["upper"] == 1.0
+
+
+# --------------------------------------------------------------------------
+# 유휴(반대편) 팔 — sim 은 rest 고정으로 학습하고 그 팔은 물리 충돌체다
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_idle_arm_resolved(name):
+    from robot_profile import idle_arm_rest_pose
+
+    p = load_robot_profile(name)
+    other = "l" if p.acting_side == "right" else "r"
+    assert p.idle_arm_canonical == tuple(f"{other}_aj_{i}" for i in range(1, 8))
+    assert len(p.idle_arm_source) == 7
+    assert p.idle_arm_source[0] == f"openarm_{'left' if other == 'l' else 'right'}_joint1"
+    rest = idle_arm_rest_pose(p)
+    assert len(rest) == 7
+
+
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_idle_arm_rest_is_mirror_of_home(name):
+    """유휴 팔 rest = 파지 팔 홈의 부호 미러 — sim `_build_home_pose` 가 강제하는 관계."""
+    from robot_profile import (
+        expected_q_home_arm,
+        idle_arm_rest_pose,
+        load_arm_mirror_sign,
+    )
+
+    p = load_robot_profile(name)
+    sign = np.array(load_arm_mirror_sign(p)[:7])
+    q_home = np.array(expected_q_home_arm(p))
+    rest = np.array(idle_arm_rest_pose(p))
+    assert np.allclose(rest, sign * q_home, atol=0.05), (
+        f"{name}: 유휴 팔 rest 가 홈의 미러가 아니다\n  rest={rest.round(4)}\n"
+        f"  기대={(sign * q_home).round(4)}"
+    )
+
+
+def test_grasp_sensor_home_differs_from_bi_s():
+    """자산이 다르면 q_home 도 다르다 — 구성 간 프로필 혼용 금지의 근거."""
+    from robot_profile import expected_q_home_arm
+
+    if "tesollo_sensor__right" not in ALL_PROFILES:
+        pytest.skip("grasp_sensor 프로필 없음")
+    a = np.array(expected_q_home_arm(load_robot_profile("tesollo_sensor__right")))
+    b = np.array(expected_q_home_arm(load_robot_profile("tesollo_bi_s__right")))
+    assert np.abs(a - b).max() > 0.1, "두 구성의 홈이 같다면 자산 가정이 틀렸다"
