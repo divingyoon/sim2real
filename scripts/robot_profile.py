@@ -344,3 +344,46 @@ def load_profile_env_cfg(profile: RobotProfile) -> dict[str, object]:
     picked = {k: cfg[k] for k in CFG_KEYS_REQUIRED}
     picked["reset_fabrics_damping_gain"] = RESET_FABRICS_DAMPING_GAIN
     return picked
+
+
+def load_arm_mirror_sign(profile: RobotProfile) -> list[float]:
+    """env 소스에서 `_ARM_MIRROR_SIGN` 을 읽는다.
+
+    preset 이 아니라 `grasp_{side}_env.py` 에 있고, env 는 isaaclab 의존이라 import 할 수
+    없다 → 소스를 AST 로 읽는다. `getattr(preset, ...)` 로 찾으면 **항상 None 이라
+    검증이 조용히 통과**한다(실제로 그 상태였다).
+    """
+    side = profile.acting_side
+    pkg_rel = Path(profile.contract.hdgp_package.replace(".", "/"))
+    path = HDGP_OPENARM_SRC / pkg_rel / f"grasp_{side}_env.py"
+    if not path.exists():
+        raise FileNotFoundError(f"env 소스 없음: {path}")
+    tree = ast.parse(path.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "_ARM_MIRROR_SIGN" for t in node.targets
+        ):
+            return [float(v) for v in ast.literal_eval(node.value)]
+    raise ValueError(f"{path}: _ARM_MIRROR_SIGN 을 찾지 못했다")
+
+
+def expected_q_home_arm(profile: RobotProfile) -> "list[float]":
+    """sim preset 이 강제하는 정답 q_home 을 **유도**한다.
+
+    sim `_build_home_pose` 는 `반대편_ARM_REST == _ARM_MIRROR_SIGN × q_home`(오차 ≤0.05)
+    를 시작 시 강제한다. 따라서 반대편 rest 값에서 q_home 을 되돌릴 수 있고, 이것이
+    배포 홈 IK 의 회귀 기준값이 된다(자산이 어긋나면 여기서 갈린다).
+    """
+    preset = load_hdgp_module(profile, "preset")
+    other = "LEFT" if profile.acting_side == "right" else "RIGHT"
+    rest = getattr(preset, f"{other}_ARM_REST_JOINT_POS", None)
+    if rest is None:
+        raise AttributeError(f"preset 에 {other}_ARM_REST_JOINT_POS 가 없다")
+    # rest 는 {관절명: 값} dict(27개) — 반대편 팔 7관절만 순서대로 뽑는다.
+    other_prefix = "l" if profile.acting_side == "right" else "r"
+    keys = [f"{other_prefix}_aj_{i}" for i in range(1, 8)]
+    missing = [k for k in keys if k not in rest]
+    if missing:
+        raise KeyError(f"{other}_ARM_REST_JOINT_POS 에 없는 관절: {missing}")
+    sign = load_arm_mirror_sign(profile)
+    return [float(sg) * float(rest[k]) for sg, k in zip(sign[:7], keys)]

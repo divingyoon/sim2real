@@ -294,20 +294,13 @@ class GraspPolicyCore:
     def _check_home_against_sim(self, q_home: np.ndarray, tol: float = 0.05) -> None:
         """sim preset 이 강제하는 기준값과 대조 — ★자산 불일치 재발 방어선.
 
-        sim `_build_home_pose` 는 `반대편_ARM_REST == _ARM_MIRROR_SIGN × q_home`(≤0.05)
-        를 강제한다. 따라서 반대편 preset 의 rest 값에서 정답 q_home 을 **유도**할 수 있다.
+        기준값은 `robot_profile.expected_q_home_arm()` 이 반대편 preset rest 와
+        `_ARM_MIRROR_SIGN`(env 소스)에서 유도한다. 예전엔 preset 에서 부호를 찾으려다
+        항상 None 이 되어 **검증이 조용히 통과**했다 — 그 구멍을 막았다.
         """
-        from robot_profile import load_hdgp_module
+        from robot_profile import expected_q_home_arm
 
-        preset = load_hdgp_module(self.profile, "preset")
-        other = "LEFT" if self.profile.acting_side == "right" else "RIGHT"
-        rest = getattr(preset, f"{other}_ARM_REST_JOINT_POS", None)
-        sign = getattr(preset, "_ARM_MIRROR_SIGN", None)
-        if rest is None or sign is None:
-            return                      # preset 이 기준값을 노출하지 않음 — 건너뛴다
-        want = np.asarray(sign, dtype=np.float64)[:NUM_ARM_DOF] * np.asarray(
-            rest, dtype=np.float64
-        )[:NUM_ARM_DOF]
+        want = np.asarray(expected_q_home_arm(self.profile), dtype=np.float64)
         err = float(np.abs(q_home - want).max())
         if err > tol:
             raise RuntimeError(
