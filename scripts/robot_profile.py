@@ -22,6 +22,7 @@ palm 은 obs 154D 중 36차원의 기준이자 Fabrics IK 목표이므로 관측
 
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -269,3 +270,77 @@ def ee_limit_arrays(profile: RobotProfile):
     lo = np.array([profile.joint_limits[j]["lower"] for j in profile.ee_canonical], dtype=np.float64)
     hi = np.array([profile.joint_limits[j]["upper"] for j in profile.ee_canonical], dtype=np.float64)
     return lo, hi
+
+
+# ---------------------------------------------------------------------------
+# hdgp env_cfg 리터럴 읽기
+# ---------------------------------------------------------------------------
+# `grasp_{side}_env_cfg.py` 는 isaaclab(→pxr) 의존이라 import 할 수 없다. 값을 배포에
+# 복제하면 sim 이 바꿨을 때 조용히 어긋나므로, **소스를 AST 로 읽어** 리터럴을 가져온다.
+_CFG_NUMERIC_NODES = (ast.BinOp, ast.UnaryOp, ast.Constant, ast.Tuple, ast.List)
+
+# env 가 cfg 가 아니라 코드에 직접 박아 둔 값 — 출처를 남긴다.
+RESET_FABRICS_DAMPING_GAIN = 10.0   # grasp_{side}_env.py `self._reset_damping = 10.0 * ...`
+
+
+def _eval_cfg_node(node):
+    """리터럴 또는 **순수 산술식**(1.0/60.0 같은)만 평가한다. 이름 참조는 거부."""
+    try:
+        return ast.literal_eval(node)
+    except (ValueError, SyntaxError, TypeError):
+        pass
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Name) or isinstance(sub, ast.Call) or isinstance(sub, ast.Attribute):
+            raise ValueError("이름/호출이 포함된 표현식은 읽지 않는다")
+        if not isinstance(sub, (*_CFG_NUMERIC_NODES, ast.operator, ast.unaryop, ast.Load)):
+            raise ValueError(f"허용되지 않은 노드 {type(sub).__name__}")
+    return eval(compile(ast.Expression(node), "<cfg>", "eval"), {"__builtins__": {}}, {})
+
+
+def load_env_cfg_literals(path: Path) -> dict[str, object]:
+    """env_cfg 소스의 `name: T = <literal>` 을 모두 수집한다.
+
+    같은 이름이 여러 클래스에서 **다른 값**으로 나오면 예외 — 어느 쪽이 진짜인지
+    추측하지 않는다.
+    """
+    tree = ast.parse(Path(path).read_text())
+    out: dict[str, object] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AnnAssign) or not isinstance(node.target, ast.Name):
+            continue
+        if node.value is None:
+            continue
+        try:
+            value = _eval_cfg_node(node.value)
+        except (ValueError, SyntaxError, TypeError):
+            continue
+        name = node.target.id
+        if name in out and out[name] != value:
+            raise ValueError(f"{path}: {name!r} 이 서로 다른 값으로 두 번 정의됨 ({out[name]} vs {value})")
+        out[name] = value
+    return out
+
+
+CFG_KEYS_REQUIRED = (
+    "max_pose_angle", "palm_delta_xyz", "palm_delta_rot_deg", "reset_home_palm_pose",
+    "fabrics_dt", "fabric_decimation", "fabrics_damping_gain", "fabrics_max_objects_per_env",
+    "finger_close_speed", "couple_four_fingers", "retighten_after_latch",
+    "lift_wait_joint7_delta", "warm_j7_min", "warm_j7_max",
+    "lift_start_min_grip_fingers", "grasp_ready_hold_steps",
+)
+
+
+def load_profile_env_cfg(profile: RobotProfile) -> dict[str, object]:
+    """구성에 대응하는 env_cfg 리터럴 + 코드 상수. 누락 키가 있으면 예외."""
+    side = profile.acting_side
+    pkg_rel = Path(profile.contract.hdgp_package.replace(".", "/"))
+    path = HDGP_OPENARM_SRC / pkg_rel / f"grasp_{side}_env_cfg.py"
+    if not path.exists():
+        raise FileNotFoundError(f"env_cfg 소스 없음: {path}")
+    cfg = load_env_cfg_literals(path)
+    missing = [k for k in CFG_KEYS_REQUIRED if k not in cfg]
+    if missing:
+        raise ValueError(f"{path}: 필요한 cfg 키 누락 {missing}")
+    picked = {k: cfg[k] for k in CFG_KEYS_REQUIRED}
+    picked["reset_fabrics_damping_gain"] = RESET_FABRICS_DAMPING_GAIN
+    return picked
