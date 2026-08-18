@@ -1,45 +1,48 @@
 #!/usr/bin/env python3
-"""grasp-v1 라이브 sim2real inference 노드 (tesollo/right grasp-v1 LSTM, obs 114D).
+"""grasp_v1 라이브 sim2real inference 노드 (구성 프로필 기반, 좌/우).
 
-기준 체크포인트:
-    hdgp/log/rl_games/open-tesol/right/grasp-v1/lstm_test3/nn/
-        last_open-tesol_r_grasp_v1-lstm_ep_20000_rew_9920.256.pth
-    (+ 같은 폴더 params/agent.yaml, LSTM 1024)
+로직은 `grasp_policy_core.GraspPolicyCore` 에 있고 이 노드는 **ROS 배선과 안전 게이트**만
+담당한다(오프라인 재현기 grasp_loop_sim 과 같은 코어를 써서 드리프트를 막는다).
 
 실행:
-    python3 grasp_inference.py \
-        --agent /path/to/agent.yaml --ckpt /path/to/...ep_20000....pth \
+    python3 grasp_inference.py --robot tesollo_bi_s__right \
+        --agent /path/to/params/agent.yaml --ckpt /path/to/...pth \
         [--device cuda:0] [--settle_time 4.0] [--object cup_big_s100]
 
     ros2 service call /grasp/start std_srvs/srv/Trigger
 
-구독:
-    /joint_states               arm 7D  (canonical r_aj_1..7)
-    /dg5f_right/joint_states    hand 20D (canonical r_hj_*)
-    /cup_pose                   PoseStamped — 컵 위치 (robot base)
-    /dg5f_right/contact_forces  Float64MultiArray — fingertip(tip) 5D [N]
+구독 (토픽은 구성 프로필에서 해석 — 좌/우 자동):
+    <arm_state>       arm 7D   (source명 → canonical 매핑)
+    <ee_state>        hand 20D
+    /cup_pose         PoseStamped — 컵 위치 (robot base)
+    <tip_force_xyz>   Float64MultiArray 15D — 손끝 3축 힘 (tip-major, tip-local, [N])
 
-발행: /isaacsim/right_arm_cmd (7D rad), /isaacsim/right_hand_cmd (20D rad)
-      → 브리지(isaacsim_cmd_to_jtc)가 robot_control JTC 로 변환 (Phase 3)
+발행: <arm_cmd> 7D rad, <ee_cmd> 20D rad
+      → 브리지(isaacsim_cmd_to_jtc)가 robot_control JTC 로 변환
 
-env `grasp_right_env.py` 재현:
-    - obs 114D  = grasp_obs_builder (base106 + object onehot8)
-    - action 11D = grasp_action_decoder:
-        · palm[:6] → Δpalm → Fabrics IK arm
-        · finger[6:11] → 접촉-게이트 stateful 폐쇄 (GraspFingerController)
-    - lift 진입 = 접촉 래치(LiftLatch, ≥3손가락 grip 8스텝 hold), joint7-only lift-wait
+계약 (sim `grasp_{side}_env.py` 재현, 08.16 개편 반영):
+    - obs 154D  : arm14 + finger40 + palm3 + tip_rel15 + palm_to_cup3 + cup_to_tip15
+                  + tip_force_local15 + joint_pos_err20 + last_actions21 + onehot8
+    - action 21D: palm 6 + 손가락 15(5×3 채널, 4지 공통닫힘, 절대 폐쇄도 + 변화율 상한)
+    - 리셋      : **고정 홈**(컵 참값 pregrasp 폐기 — 실기 컵 위치는 perception 결과라
+                  참값 텔레포트가 불가능하고, 홈→컵 접근은 정책이 학습한 몫)
+    - lift 진입 : 접촉 래치(≥3손가락 8스텝 hold) → joint7-only lift-wait
     - 정책 60Hz, fabric_decimation=2
 
-★ tip-only 제어: env 의 손가락 폐쇄 게이트·lift 래치는 (tip|mid|distal) 을 쓰지만,
-  middle/distal 은 **critic 전용(privileged)** 으로 학습돼 실기서 감지 불가하다. 따라서
-  라이브 제어는 **tip 접촉만** 사용한다(디코더 distal 입력 미배선). rigid 컵에선 tip 미접촉
-  구간에 _3/_4 가 FULL_GRIP 까지 감겨 더 단단히 잡힌다(허용). distal 은 sim parity 검증용.
+★ tip-only 제어: sim 의 손가락 게이트·lift 래치는 (tip|mid|distal) 을 쓰지만 middle/distal
+  은 **critic 전용(privileged)** 이라 실기서 감지 불가하다. 라이브는 tip 접촉만 쓴다 —
+  의도된 차이다.
+
+★ 안전 게이트(전부 실사고 대응, 유지할 것):
+  · START_FRESH_SEC : 묵은 컵 pose 로 start 되어 재개 순간 발진한 사고
+  · STALL_ABORT_SEC : 무기한 홀드 금지
+  · CONTACT_GATE_DIST: 실물 F/T 가 테이블 접촉도 잡아 생긴 거짓 lift 래치
+  · 손 피드백 추종 검사: 드라이버 두절 시 obs zeros → LSTM 발산(팔 후퇴)
 """
 
 from __future__ import annotations
 
 import argparse
-import math
 import sys
 import time
 from enum import Enum, auto
@@ -61,7 +64,6 @@ for _p in [
 _OPENARM_SRC = _SCRIPT_DIR.parent.parent / "hdgp" / "source" / "openarm"
 sys.path.insert(0, str(_OPENARM_SRC))
 
-import torch
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
@@ -69,81 +71,27 @@ from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Float64MultiArray
 from std_srvs.srv import Trigger
 
-from fabrics_sim.fabrics.openarm_tesollo_pose_fabric import OpenArmTeoslloPoseFabric
-from fabrics_sim.integrator.integrators import DisplacementIntegrator
-from fabrics_sim.utils.utils import initialize_warp
-from fabrics_sim.worlds.world_mesh_model import WorldMeshesModel
-
 sys.path.insert(0, str(_SCRIPT_DIR))
 from fabrics_ros_interface import create_publisher
 from policy_loader import RLGamesLstmActorPolicy
-from jtc_bridge_core import load_profile_joints
 from episode_recorder import EpisodeCsvRecorder
+from grasp_obs_builder import REAL_CUP_INDEX, make_object_onehot
+from grasp_policy_core import GraspPolicyCore, TickSensors
+from robot_profile import load_hdgp_module, load_robot_profile
 
-DEFAULT_PROFILE = str(
-    Path.home() / "rl_ws/robot_control/src/robot_control/profiles/openarm_tesollo.yaml"
-)
-from grasp_obs_builder import (
-    ACTOR_OBS_DIM,
-    REAL_CUP_INDEX,
-    assemble_actor_obs,
-    make_object_onehot,
-)
-from grasp_action_decoder import (
-    DEFAULT_FINGER_CLOSE_SPEED,
-    DEFAULT_GRASP_READY_HOLD_STEPS,
-    DEFAULT_LIFT_MIN_GRIP_FINGERS,
-    DEFAULT_LIFT_WAIT_JOINT7_DELTA,
-    DEFAULT_WARM_J7_MAX,
-    DEFAULT_WARM_J7_MIN,
-    GraspFingerController,
-    LiftLatch,
-    joint7_lift_wait_target,
-    lift_arm_interp,
-    scale_palm_delta,
-)
-
-import importlib as _il
-
-_preset = _il.import_module("openarm.tesollo.right.grasp_v1.grasp_right_preset")
-RIGHT_ARM_JOINT_NAMES = _preset.RIGHT_ARM_JOINT_NAMES
-RIGHT_HAND_JOINT_NAMES = _preset.RIGHT_HAND_JOINT_NAMES
-HAND_APPROACH_POSE = _preset.HAND_APPROACH_POSE
-HAND_FULL_GRIP_POSE = _preset.HAND_FULL_GRIP_POSE
-RIGHT_ARM_START_POSE = _preset.RIGHT_ARM_START_POSE
-PREGRASP_OFFSET = _preset.PREGRASP_OFFSET
-palm_pose_mins = _preset.palm_pose_mins
-palm_pose_maxs = _preset.palm_pose_maxs
-
-_consts = _il.import_module("openarm.tesollo.right.grasp_v1.grasp_right_constants")
-NUM_ARM_DOF = _consts.NUM_ARM_DOF
-NUM_HAND_DOF = _consts.NUM_HAND_DOF
-LIFT_PHASE_STEPS = _consts.LIFT_PHASE_STEPS
-PREGRASP_FABRICS_STEPS = _consts.PREGRASP_FABRICS_STEPS
-EPISODE_STEPS = _consts.EPISODE_STEPS
-CONTACT_FORCE_THRESHOLD = _consts.CONTACT_FORCE_THRESHOLD
+# 계약 상수·자세는 **구성 프로필**을 통해 hdgp 에서 해석한다(값 복제 금지).
+# 복제하면 sim 이 바꿨을 때 조용히 어긋나고, 좌우 미러 자세가 특히 그렇다.
 
 # ---------------------------------------------------------------------------
-# 상수 (grasp_v1 env_cfg 기본값 — Isaac 무의존이라 여기 반영, 출처 주석)
+# 노드 운영 상수 (구성과 무관 — sim 계약이 아니라 배포 정책)
 # ---------------------------------------------------------------------------
-PALM_DELTA_XYZ = 0.15          # env_cfg palm_delta_xyz
-PALM_DELTA_ROT_DEG = 20.0      # env_cfg palm_delta_rot_deg
-MAX_POSE_ANGLE = 45.0          # env_cfg max_pose_angle
-FABRIC_DECIMATION = 2          # env_cfg fabric_decimation
-FABRICS_DT = 1.0 / 60.0
-FABRICS_DAMPING = 20.0
-CONTROL_HZ = 60.0
-
-# pregrasp 방향: ez=90°, ey=0°, ex=90°
-PREGRASP_ORI = [math.radians(90.0), math.radians(0.0), math.radians(90.0)]
-APPROACH_CMD_HZ = 10.0
-
-# 손 obs 방어 상수 (08.03 팔 후퇴 근본원인 대응, grasp_loop_sim 실증)
-HAND_START_MISMATCH_RAD = 0.6   # start 시 |hand - APPROACH| 허용 한계 (죽은손 thumb_2 오차=1.57)
-SENSOR_STALE_SEC = 0.5          # RUNNING 중 팔/손/컵 토픽 두절 판정 시간
-START_FRESH_SEC = 1.0           # start 허용 조건: 모든 센서가 이 시간 내 수신됐을 것
-STALL_ABORT_SEC = 5.0           # RUNNING 두절 홀드가 이 시간 지속되면 에피소드 자동 중단
-REPLAY_DECIMATION = 2           # PLACING 역재생 감속(2 = 30Hz, 에피소드의 2배 느리게)
+CONTROL_HZ = 60.0               # 정책 루프(sim decimation 2 @120Hz = 60Hz 와 동일)
+APPROACH_CMD_HZ = 10.0          # APPROACHING 명령 발행
+HAND_START_MISMATCH_RAD = 0.6   # settle 후 |hand − APPROACH| 허용 한계(죽은손 thumb_2 오차 1.57)
+SENSOR_STALE_SEC = 0.5          # RUNNING 중 팔/손/컵 두절 판정
+START_FRESH_SEC = 1.0           # start 허용: 모든 센서가 이 시간 내 수신됐을 것
+STALL_ABORT_SEC = 5.0           # 두절 홀드가 이 시간 지속되면 에피소드 자동 중단
+REPLAY_DECIMATION = 2           # PLACING 역재생 감속(2 = 30Hz)
 CONTACT_GATE_DIST = 0.10        # palm-컵 거리[m] 이내에서만 tip 접촉 유효(테이블 접촉 배제)
 
 
@@ -155,9 +103,6 @@ class State(Enum):
     DONE = auto()
 
 
-def _t(vals, device: str) -> torch.Tensor:
-    return torch.tensor(vals, dtype=torch.float32, device=device)
-
 
 class GraspInferenceNode(Node):
 
@@ -165,104 +110,84 @@ class GraspInferenceNode(Node):
         self,
         agent_yaml: str,
         checkpoint_path: str,
+        robot: str = "tesollo_bi_s__right",
         device: str = "cuda:0",
         settle_time: float = 4.0,
-        object_name: str | int = REAL_CUP_INDEX,
-        profile_path: str = DEFAULT_PROFILE,
+        object_name: str | int | None = None,
         allow_hand_mismatch: bool = False,
-        contact_threshold: float = CONTACT_FORCE_THRESHOLD,
-        episode_steps: int = EPISODE_STEPS,
+        contact_threshold: float | None = None,
+        episode_steps: int | None = None,
         log_dir: str = "~/rl_ws/sim2real/logs",
     ) -> None:
         super().__init__("grasp_inference")
         self.device = device
         self.settle_time = settle_time
         self.allow_hand_mismatch = allow_hand_mismatch
-        # sim 상수(0.1N)는 노이즈 없는 sim 접촉센서 기준 — 실물 F/T 노이즈/진동 위로 튜닝.
-        self.contact_threshold = float(contact_threshold)
-        self.episode_steps = int(episode_steps)
         self.recorder = EpisodeCsvRecorder(log_dir)
         self._traj: list[tuple[np.ndarray, np.ndarray]] = []   # (arm_cmd, hand_cmd) — 역재생용
         self._replay_idx = 0
         self._replay_tick = 0
 
-        # /joint_states 는 source명(openarm_right_joint*/rj_dg_*)으로 발행되므로,
-        # profile 로 source→(canonical index, sign) 매핑을 만들어 obs 순서로 읽는다.
-        _prof = load_profile_joints(profile_path)
-        self._arm_src = {}   # source_name -> (canonical_idx, sign)
-        for _i, _canon in enumerate(RIGHT_ARM_JOINT_NAMES):
-            _p = _prof.get(_canon)
-            if _p:
-                self._arm_src[_p["source"]] = (_i, _p["sign"])
-        self._hand_src = {}
-        for _i, _canon in enumerate(RIGHT_HAND_JOINT_NAMES):
-            _p = _prof.get(_canon)
-            if _p:
-                self._hand_src[_p["source"]] = (_i, _p["sign"])
+        # ── 구성 프로필 ──────────────────────────────────────────────────────
+        # 자산·토픽·관절·계약을 여기서 해석한다. 매니페스트 대조 검증이 함께 돈다 —
+        # 배포가 sim 과 다른 로봇 자산을 쓰던 사고(palm 6.5cm 어긋남)의 방어선.
+        self.profile = load_robot_profile(robot)
+        self.get_logger().info(
+            f"구성 [{self.profile.name}] side={self.profile.acting_side} "
+            f"ee={self.profile.ee_type}/{self.profile.ee_dof} "
+            f"fabrics={self.profile.fabrics.robot_dir}"
+        )
+        preset = load_hdgp_module(self.profile, "preset")
+        consts = load_hdgp_module(self.profile, "constants")
+        self.hand_approach = np.asarray(preset.HAND_APPROACH_POSE, dtype=np.float64)
+        self.hand_joint_names = list(self.profile.ee_canonical)
+        self.episode_steps = int(consts.EPISODE_STEPS if episode_steps is None else episode_steps)
+        # sim 상수(0.1N)는 노이즈 없는 sim 접촉센서 기준 — 실물 F/T 노이즈/진동 위로 튜닝.
+        self.contact_threshold = float(
+            consts.CONTACT_FORCE_THRESHOLD if contact_threshold is None else contact_threshold
+        )
+
+        # /joint_states 는 source명으로 발행되므로 source→(canonical index, sign) 매핑.
+        _lim = self.profile.joint_limits
+        self._arm_src = {
+            _lim[c]["source"]: (i, _lim[c]["sign"])
+            for i, c in enumerate(self.profile.arm_canonical)
+        }
+        self._hand_src = {
+            _lim[c]["source"]: (i, _lim[c]["sign"])
+            for i, c in enumerate(self.profile.ee_canonical)
+        }
 
         # ── Policy ───────────────────────────────────────────────────────────
         self.get_logger().info("Policy 로드 중...")
         self.policy = RLGamesLstmActorPolicy(
             agent_yaml_path=agent_yaml,
             checkpoint_path=checkpoint_path,
-            obs_dim=ACTOR_OBS_DIM,   # 114
-            action_dim=11,
+            obs_dim=self.profile.contract.obs_dim,        # 154
+            action_dim=self.profile.contract.action_dim,  # 21
             device=device,
         )
 
         # 잡는 물체 onehot (라이브 고정). 기본 cup_big_s100(index 1).
-        self.object_onehot = make_object_onehot(object_name)
-        self.get_logger().info(f"물체 onehot 고정: {object_name} → {self.object_onehot.tolist()}")
+        _obj = REAL_CUP_INDEX if object_name is None else object_name
+        self.object_onehot = make_object_onehot(_obj)
+        self.get_logger().info(f"물체 onehot 고정: {_obj} → {self.object_onehot.tolist()}")
 
-        # ── Fabrics ──────────────────────────────────────────────────────────
-        self.get_logger().info("Fabrics 초기화 중...")
-        initialize_warp("0")
-        self.world_model = WorldMeshesModel(
-            batch_size=1,
-            max_objects_per_env=8,   # grasp_v1 env_cfg fabrics_max_objects_per_env (world 객체 7개)
+        # ── 정책 tick 코어 (Fabrics·obs·디코더 전부 여기서) ────────────────────
+        self.get_logger().info("Fabrics·정책 코어 초기화 중...")
+        self.core = GraspPolicyCore(
+            profile=self.profile,
+            policy=self.policy,
             device=device,
-            world_filename="open_tesollo_boxes_no_table",
+            contact_threshold=self.contact_threshold,
+            contact_gate_dist=CONTACT_GATE_DIST,
+            object_onehot=self.object_onehot,
         )
-        self.object_ids, self.object_indicator = self.world_model.get_object_ids()
-        self.fabric = OpenArmTeoslloPoseFabric(
-            batch_size=1,
-            device=device,
-            timestep=FABRICS_DT,
-            graph_capturable=False,
-            use_hand_fabric=False,
+        self.get_logger().info(
+            "고정 홈 q_home=["
+            + ", ".join(f"{v:+.4f}" for v in self.core.q_home_arm.tolist())
+            + "]  (컵 참값 pregrasp 폐기 — 접근은 정책이 학습)"
         )
-        self.integrator = DisplacementIntegrator(self.fabric)
-
-        # cspace default hand = FULL_GRIP 방향 (arm IK null-space)
-        cspace_def = self.fabric.default_config.clone()
-        cspace_def[0, NUM_ARM_DOF:] = _t(HAND_FULL_GRIP_POSE, device)
-        self.fabric.default_config.copy_(cspace_def)
-
-        # ── 파라미터 텐서 (팔 delta / palm workspace) ─────────────────────────
-        _dr = math.radians(PALM_DELTA_ROT_DEG)
-        self.delta_mins = np.array([-PALM_DELTA_XYZ] * 3 + [-_dr] * 3)
-        self.delta_maxs = np.array([PALM_DELTA_XYZ] * 3 + [_dr] * 3)
-        self.palm_mins = np.array(palm_pose_mins(MAX_POSE_ANGLE), dtype=np.float64)
-        self.palm_maxs = np.array(palm_pose_maxs(MAX_POSE_ANGLE), dtype=np.float64)
-        self.damping_gain = FABRICS_DAMPING * torch.ones(1, 1, device=device)
-
-        # ── grasp action 디코더 (stateful) ────────────────────────────────────
-        self.finger_ctrl = GraspFingerController(
-            hand_open=np.array(HAND_APPROACH_POSE, dtype=np.float64),
-            hand_full_grip=np.array(HAND_FULL_GRIP_POSE, dtype=np.float64),
-            close_speed=DEFAULT_FINGER_CLOSE_SPEED,
-        )
-        self.lift_latch = LiftLatch(
-            min_contacts=DEFAULT_LIFT_MIN_GRIP_FINGERS,
-            hold_steps=DEFAULT_GRASP_READY_HOLD_STEPS,
-        )
-
-        # fabric 상태
-        q0 = torch.cat([_t(RIGHT_ARM_START_POSE, device),
-                        _t(HAND_APPROACH_POSE, device)]).unsqueeze(0)
-        self.fabric_q = q0.clone()
-        self.fabric_qd = torch.zeros(1, 27, device=device)
-        self.fabric_qdd = torch.zeros(1, 27, device=device)
 
         # ── 센서 버퍼 ────────────────────────────────────────────────────────
         # ★hand_pos 초기값 = APPROACH (zeros 금지): 손 상태 미수신 시 zeros(20) obs 가
@@ -270,42 +195,37 @@ class GraspInferenceNode(Node):
         self.arm_pos = np.zeros(7)
         self.arm_vel = np.zeros(7)
         self.arm_eff = np.zeros(7)
-        self.hand_pos = np.array(HAND_APPROACH_POSE, dtype=np.float64)
+        self.hand_pos = self.hand_approach.copy()
         self.hand_vel = np.zeros(20)
         self.hand_eff = np.zeros(20)
         self.cup_pos = np.zeros(3)
-        self.tip_contact = np.zeros(5)   # fingertip F/T 이진 (제어에 쓰는 유일한 접촉)
-        self.tip_force_raw = np.zeros(5) # 원시 힘[N] (CSV 기록용)
+        # ★08.16 계약: 접촉 obs 는 이진 5D 가 아니라 **3축 힘 15D**(tip-local, 원시 [N]).
+        self.tip_force_local = np.zeros((5, 3))
 
         self._arm_ready = False
         self._hand_ready = False
         self._cup_ready = False
-        # staleness 감시: 토픽별 마지막 수신 시각 (RUNNING 중 두절 감지)
-        self._last_rx = {"arm": 0.0, "hand": 0.0, "cup": 0.0}
-
+        # ★tip 을 정식 감시 대상으로 넣는다: 접촉 힘은 이제 obs 15차원이라, 발행이 없으면
+        #   조용히 "무접촉" 이 되어 정책이 영원히 lift 하지 못한다(무접촉과 두절이 구분 안 됨).
+        self._tip_ready = False
+        self._last_rx = {"arm": 0.0, "hand": 0.0, "cup": 0.0, "tip": 0.0}
 
         # ── 에피소드 상태 ────────────────────────────────────────────────────
         self.state = State.IDLE
         self.step_count = 0
-        self.last_actions = np.zeros(11)
-
-        self.pregrasp_palm_pose = np.zeros(6)
-        self.pregrasp_arm_pos = np.zeros(7)
-
-        # lift 캡처 버퍼
-        self.lift_arm_start = None
-        self.prelift_target = None
-        self.lift_start_step = None
-
+        self._stall_since = None
         self._approach_start_time = 0.0
 
-        # ── ROS2 ─────────────────────────────────────────────────────────────
-        self.create_subscription(JointState, "/joint_states", self._arm_cb, 10)
-        self.create_subscription(JointState, "/dg5f_right/joint_states", self._hand_cb, 10)
+        # ── ROS2 (토픽은 전부 구성 프로필에서) ─────────────────────────────────
+        t = self.profile.topics
+        self.create_subscription(JointState, t["arm_state"], self._arm_cb, 10)
+        self.create_subscription(JointState, t["ee_state"], self._hand_cb, 10)
         self.create_subscription(PoseStamped, "/cup_pose", self._cup_cb, 10)
-        self.create_subscription(Float64MultiArray, "/dg5f_right/contact_forces", self._tip_cb, 10)
+        self.create_subscription(Float64MultiArray, t["tip_force_xyz"], self._tip_cb, 10)
 
         self.cmd_pub = create_publisher()
+        self.arm_cmd_topic = t["arm_cmd"]
+        self.hand_cmd_topic = t["ee_cmd"]
 
         self.create_service(Trigger, "/grasp/start", self._start_cb)
         self.create_service(Trigger, "/grasp/stop", self._stop_cb)
@@ -357,16 +277,24 @@ class GraspInferenceNode(Node):
         self._cup_ready = True
         self._last_rx["cup"] = time.monotonic()
 
-    def _binary(self, data) -> np.ndarray:
-        f = np.asarray(list(data[:5]), dtype=np.float64)
-        if f.shape[0] < 5:
-            return np.zeros(5)
-        return (f > self.contact_threshold).astype(np.float64)
-
     def _tip_cb(self, msg: Float64MultiArray) -> None:
-        if len(msg.data) >= 5:
-            self.tip_force_raw = np.asarray(list(msg.data[:5]), dtype=np.float64)
-            self.tip_contact = self._binary(msg.data)
+        """<tip_force_xyz> 15D (tip-major 5×3, tip-local 원시 [N]) 수신.
+
+        ★차원 검증은 조용히 넘기지 않는다. 구 5D `contact_forces` 를 이 토픽에 잘못
+          연결하면 길이 5 로 들어오는데, 이를 zeros 로 메우면 "접촉 전무" 로 보여
+          정책이 영원히 lift 하지 못한다(과거 손 obs zeros 사고와 동형).
+        """
+        n = len(msg.data)
+        if n != 15:
+            self.get_logger().error(
+                f"tip 힘 토픽 길이 {n} != 15 — 구 5D contact_forces 를 연결했는지 확인 "
+                f"({self.profile.topics['tip_force_xyz']} 는 15D tip-major)",
+                throttle_duration_sec=5.0,
+            )
+            return
+        self.tip_force_local = np.asarray(list(msg.data), dtype=np.float64).reshape(5, 3)
+        self._tip_ready = True
+        self._last_rx["tip"] = time.monotonic()
 
     # ------------------------------------------------------------------
     # 서비스 Callbacks
@@ -376,11 +304,12 @@ class GraspInferenceNode(Node):
             response.success = False
             response.message = f"ERROR: 현재 상태={self.state.name}, IDLE/DONE 에서만 start"
             return response
-        if not (self._arm_ready and self._hand_ready and self._cup_ready):
+        if not (self._arm_ready and self._hand_ready and self._cup_ready and self._tip_ready):
             missing = []
-            if not self._arm_ready:  missing.append("/joint_states")
-            if not self._hand_ready: missing.append("/dg5f_right/joint_states")
+            if not self._arm_ready:  missing.append(self.profile.topics["arm_state"])
+            if not self._hand_ready: missing.append(self.profile.topics["ee_state"])
             if not self._cup_ready:  missing.append("/cup_pose")
+            if not self._tip_ready:  missing.append(self.profile.topics["tip_force_xyz"])
             response.success = False
             response.message = f"ERROR: 미수신 토픽: {missing}"
             self.get_logger().error(response.message)
@@ -410,7 +339,6 @@ class GraspInferenceNode(Node):
                 "APPROACHING 에서 명령 추종을 검사합니다"
             )
 
-        self._compute_pregrasp()
         self._reset_episode_state()
         _csv = self.recorder.start()
         self.get_logger().info(f"에피소드 CSV 기록 시작: {_csv}")
@@ -419,7 +347,7 @@ class GraspInferenceNode(Node):
         response.success = True
         response.message = (
             f"APPROACHING 시작 (settle={self.settle_time}s). "
-            f"pregrasp_arm={[f'{v:.3f}' for v in self.pregrasp_arm_pos.tolist()]}"
+            f"home_arm={[f'{v:.3f}' for v in self.core.q_home_arm.tolist()]}"
         )
         self.get_logger().info(response.message)
         return response
@@ -447,66 +375,22 @@ class GraspInferenceNode(Node):
         thumb_2(기대 −1.57)가 0 으로 남아 걸린다. 피드백이 얼면 obs 가 zeros 로 조립되어
         LSTM 발산(팔 후퇴, 08.03 실증)이라 RUNNING 진입 금지가 안전.
         """
-        err = np.abs(self.hand_pos - np.array(HAND_APPROACH_POSE))
+        err = np.abs(self.hand_pos - self.hand_approach)
         return [
-            (RIGHT_HAND_JOINT_NAMES[i], float(self.hand_pos[i]), float(HAND_APPROACH_POSE[i]))
+            (self.hand_joint_names[i], float(self.hand_pos[i]), float(self.hand_approach[i]))
             for i in np.where(err > HAND_START_MISMATCH_RAD)[0]
         ]
 
     def _reset_episode_state(self) -> None:
+        """에피소드 상태 초기화 — 코어가 fabric·디코더·래치·LSTM 을 함께 되돌린다.
+
+        코어 기준 자세는 **고정 홈**이다(컵 참값 pregrasp 폐기). 실기에서 컵 위치는
+        perception 결과라 참값으로 팔을 텔레포트할 수 없고, 접근은 정책이 학습한다.
+        """
         self.step_count = 0
         self._traj.clear()
-        self._stall_since = None        # RUNNING 두절 지속 시각 (STALL_ABORT_SEC 판정)
-        self.last_actions = np.zeros(11)
-        self.policy.reset_states()      # LSTM hidden/cell 0으로 (sim zero_rnn_on_done 대응)
-        self.finger_ctrl.reset()
-        self.lift_latch.reset()
-        self.lift_arm_start = None
-        self.prelift_target = None
-        self.lift_start_step = None
-
-    # ------------------------------------------------------------------
-    # Pregrasp IK (env reset 재현)
-    # ------------------------------------------------------------------
-    def _compute_pregrasp(self) -> None:
-        pregrasp_pos = self.cup_pos + np.array(PREGRASP_OFFSET)
-        pose6 = np.concatenate([pregrasp_pos, np.array(PREGRASP_ORI)])
-        self.pregrasp_palm_pose = np.clip(pose6, self.palm_mins, self.palm_maxs)
-
-        q_start = torch.cat([
-            _t(RIGHT_ARM_START_POSE, self.device),
-            _t(HAND_APPROACH_POSE, self.device),
-        ]).unsqueeze(0)
-        self.fabric_q = q_start.clone()
-        self.fabric_qd = torch.zeros(1, 27, device=self.device)
-        self.fabric_qdd = torch.zeros(1, 27, device=self.device)
-
-        palm_tgt = _t(self.pregrasp_palm_pose, self.device).unsqueeze(0)
-        pca_zero = torch.zeros(1, 5, device=self.device)
-        self.get_logger().info(
-            f"Pregrasp IK rollout ({PREGRASP_FABRICS_STEPS}스텝)... cup={self.cup_pos.tolist()}"
-        )
-        for _ in range(PREGRASP_FABRICS_STEPS):
-            self.fabric.set_features(
-                pca_zero, palm_tgt, "euler_zyx",
-                self.fabric_q.detach(), self.fabric_qd.detach(),
-                self.object_ids, self.object_indicator, self.damping_gain,
-            )
-            for _ in range(FABRIC_DECIMATION):
-                self.fabric_q, self.fabric_qd, self.fabric_qdd = self.integrator.step(
-                    self.fabric_q.detach(), self.fabric_qd.detach(),
-                    self.fabric_qdd.detach(), FABRICS_DT,
-                )
-        self.pregrasp_arm_pos = self.fabric_q[0, :NUM_ARM_DOF].cpu().numpy()
-
-        cspace_def = self.fabric.default_config.clone()
-        cspace_def[0, :NUM_ARM_DOF] = _t(self.pregrasp_arm_pos, self.device)
-        self.fabric.default_config.copy_(cspace_def)
-
-        self.fabric_q[0, :NUM_ARM_DOF] = _t(self.arm_pos, self.device)
-        self.fabric_q[0, NUM_ARM_DOF:] = _t(self.hand_pos, self.device)
-        self.fabric_qd.zero_()
-        self.fabric_qdd.zero_()
+        self._stall_since = None
+        self.core.reset_episode(self.core.q_home_arm, self.hand_pos)
 
     # ------------------------------------------------------------------
     # APPROACHING (10Hz)
@@ -514,7 +398,11 @@ class GraspInferenceNode(Node):
     def _approach_loop(self) -> None:
         if self.state != State.APPROACHING:
             return
-        self.cmd_pub.send_right_full(self.pregrasp_arm_pos.tolist(), list(HAND_APPROACH_POSE))
+        # 컵과 무관한 **고정 홈** 으로 이동한다. 컵 위치는 perception 결과라 참값
+        # pregrasp 로 텔레포트할 수 없고, 홈→컵 접근은 정책이 학습한 몫이다.
+        self.cmd_pub.send_side_full(
+            self.profile.acting_side, self.core.q_home_arm.tolist(), self.hand_approach.tolist()
+        )
         if time.monotonic() - self._approach_start_time >= self.settle_time:
             # ★죽은 손 판별 게이트: settle 동안 APPROACH 를 명령했는데도 손 피드백이
             #   안 따라오면(예: 물리 -1.57 인데 0.000 보고 = Modbus 피드백 동결) RUNNING 금지.
@@ -529,10 +417,10 @@ class GraspInferenceNode(Node):
                 self.recorder.close()
                 self.state = State.IDLE
                 return
-            self.fabric_q[0, :NUM_ARM_DOF] = _t(self.arm_pos, self.device)
-            self.fabric_q[0, NUM_ARM_DOF:] = _t(self.hand_pos, self.device)
-            self.fabric_qd.zero_()
-            self.fabric_qdd.zero_()
+            # RUNNING 진입 직전 코어 상태를 **실측**에서 다시 시작한다(첫 tick 점프 방지).
+            # 이후로는 fabric_q 를 실측 재동기화하지 않는다 — 느린 실팔 위치로 명령이
+            # 붕괴해 전진 불가(08.03 RUNNING 동결 근본원인).
+            self.core.reset_episode(self.arm_pos, self.hand_pos)
             self.state = State.RUNNING
             self.get_logger().info("settle 완료 → RUNNING")
 
@@ -570,127 +458,45 @@ class GraspInferenceNode(Node):
             return
         self._stall_since = None
 
-        # 1~2. 관측용 FK 는 **실측 관절**로 계산 (env: palm/fingertip = 로봇 측정 상태).
-        #    ★fabric_q 는 여기서 실측으로 재동기화하지 않는다 — env 와 동일하게 fabric_q 는
-        #    영속 궤적생성기 상태(로봇이 추종할 명령)다. 매 tick 실측 동기화하면 느린 실팔
-        #    위치로 명령이 붕괴해 전진 불가(08.03 실기 RUNNING 동결 근본원인).
-        q_meas = torch.cat([
-            _t(self.arm_pos, self.device), _t(self.hand_pos, self.device)
-        ]).unsqueeze(0)
-        with torch.inference_mode():
-            palm_pose_6d = self.fabric.get_palm_pose(q_meas, "euler_zyx")
-            fingertip_pos = self.fabric.get_fingertip_positions(q_meas)
-        palm_center = palm_pose_6d[0, :3].cpu().numpy()
-        tips = fingertip_pos[0].cpu().numpy()   # (5,3)
+        # ── 정책 tick: FK → obs 154D → action 21D → 손 20D/팔 7D ────────────
+        # 로직은 전부 GraspPolicyCore 에 있다(grasp_loop_sim 과 공유해 드리프트 차단).
+        out = self.core.step(
+            TickSensors(
+                arm_pos=self.arm_pos, arm_vel=self.arm_vel,
+                hand_pos=self.hand_pos, hand_vel=self.hand_vel,
+                cup_pos=self.cup_pos, tip_force_local=self.tip_force_local,
+            ),
+            step_count=self.step_count,
+        )
 
-        # [debug] RUNNING 중 palm 이 컵으로 접근하는지 검증(거리 줄면 정상 grasp)
-        _pc_dist = float(np.linalg.norm(palm_center - self.cup_pos))
+        # [debug] palm 이 컵으로 접근하는지 (거리 줄면 정상)
         self.get_logger().info(
-            f"[RUNNING] palm={palm_center.round(3).tolist()} "
-            f"cup={self.cup_pos.round(3).tolist()} dist={_pc_dist:.3f}m",
+            f"[RUNNING] palm={out.palm_center.round(3).tolist()} "
+            f"cup={self.cup_pos.round(3).tolist()} dist={out.palm_cup_dist:.3f}m"
+            + (f"  lift(j7 {out.action[0]:+.2f})" if out.is_lift else ""),
             throttle_duration_sec=0.5,
         )
+        if out.just_entering_lift:
+            self.get_logger().info(
+                f"[Lift latch] step={self.step_count}, "
+                f"j7: {self.core.lift_arm_start[6]:.3f} → {self.core.prelift_target[6]:.3f}"
+            )
 
-        # 2.5 접촉 유효화: 실물 tip F/T 는 **테이블 접촉도** 잡는다(sim 접촉센서는 컵-필터
-        #     쌍이라 테이블 무감지). palm 이 컵에서 멀면 접촉은 컵 유래일 수 없으므로 0 처리
-        #     — 시작 직후 거짓 lift 래치(08.03 step7, dist 0.16 에서 발동) 차단.
-        if _pc_dist < CONTACT_GATE_DIST:
-            tip_contact = self.tip_contact
-        else:
-            tip_contact = np.zeros(5)
-
-        # 3. obs 114D
-        obs_np = assemble_actor_obs(
-            arm_joint_pos=self.arm_pos,
-            arm_joint_vel=self.arm_vel,
-            finger_joint_pos=self.hand_pos,
-            finger_joint_vel=self.hand_vel,
-            palm_center=palm_center,
-            fingertip_pos=tips,
-            cup_pos=self.cup_pos,
-            binary_contact=tip_contact,
-            last_actions=self.last_actions,
-            object_onehot=self.object_onehot,
+        # 명령 전송 (+역재생용 궤적 기록)
+        self.cmd_pub.send_side_full(
+            self.profile.acting_side, out.arm_cmd.tolist(), out.hand_cmd.tolist()
         )
-        obs = torch.as_tensor(obs_np, dtype=torch.float32, device=self.device).unsqueeze(0)
+        self._traj.append((out.arm_cmd.copy(), out.hand_cmd.copy()))
 
-        # 4. Policy → action 11D
-        action = self.policy.get_action(obs)[0].cpu().numpy()
-        self.last_actions = action.copy()
-        palm_action = action[:6]
-        finger_action = action[6:11]
-
-        # 5. lift 접촉 래치 판정 (tip-only: middle/distal 은 critic 전용·제어 미사용)
-        grip = int(tip_contact.sum())
-        was_latched = self.lift_latch.latched
-        is_lift = self.lift_latch.update(grip)
-        just_entering = is_lift and not was_latched
-
-        # 6. 손가락: 항상 tip-only 접촉-게이트 폐쇄 (env: 두 phase 모두 policy-controlled)
-        hand_cmd = self.finger_ctrl.step(finger_action, tip_contact)   # distal 미배선 → tip-only
-
-        # 7. 팔
-        if not is_lift:
-            # Grasp phase: Δpalm → Fabrics IK (fabric_q 는 영속 상태로 적분 — env 동일)
-            delta = scale_palm_delta(palm_action, self.delta_mins, self.delta_maxs)
-            palm_pose = self.pregrasp_palm_pose + delta
-            palm_mins_eff = np.minimum(self.palm_mins, self.pregrasp_palm_pose)
-            palm_maxs_eff = np.maximum(self.palm_maxs, self.pregrasp_palm_pose)
-            palm_pose = np.clip(palm_pose, palm_mins_eff, palm_maxs_eff)
-
-            # env parity: fabric_q hand 부분은 손 명령으로 동기화(FK·nullspace 용)
-            self.fabric_q[0, NUM_ARM_DOF:] = _t(hand_cmd, self.device)
-            self.fabric_qd[0, NUM_ARM_DOF:] = 0.0
-
-            self.fabric.set_features(
-                torch.zeros(1, 5, device=self.device),
-                _t(palm_pose, self.device).unsqueeze(0),
-                "euler_zyx",
-                self.fabric_q.detach(), self.fabric_qd.detach(),
-                self.object_ids, self.object_indicator, self.damping_gain,
-            )
-            for _ in range(FABRIC_DECIMATION):
-                self.fabric_q, self.fabric_qd, self.fabric_qdd = self.integrator.step(
-                    self.fabric_q.detach(), self.fabric_qd.detach(),
-                    self.fabric_qdd.detach(), FABRICS_DT,
-                )
-            arm_cmd = self.fabric_q[0, :NUM_ARM_DOF].cpu().numpy()
-        else:
-            # Lift phase: 진입 시 캡처 → joint7-only lift-wait 선형보간
-            # (env parity: lift 중 fabric arm 상태는 실측으로 동결 — integrator 발산 방지)
-            self.fabric_q[0, :NUM_ARM_DOF] = _t(self.arm_pos, self.device)
-            self.fabric_qd[0, :NUM_ARM_DOF] = 0.0
-            self.fabric_qdd[0, :NUM_ARM_DOF] = 0.0
-            if just_entering:
-                self.lift_arm_start = self.arm_pos.copy()
-                self.prelift_target = joint7_lift_wait_target(
-                    self.arm_pos,
-                    joint7_delta=DEFAULT_LIFT_WAIT_JOINT7_DELTA,
-                    joint7_min=DEFAULT_WARM_J7_MIN,
-                    joint7_max=DEFAULT_WARM_J7_MAX,
-                )
-                self.lift_start_step = self.step_count
-                self.get_logger().info(
-                    f"[Lift latch] step={self.step_count}, "
-                    f"j7: {self.lift_arm_start[6]:.3f} → {self.prelift_target[6]:.3f}"
-                )
-            progress = min(
-                float(self.step_count - self.lift_start_step) / max(1, LIFT_PHASE_STEPS - 1), 1.0
-            )
-            arm_cmd = lift_arm_interp(self.lift_arm_start, self.prelift_target, progress)
-
-        # 8. 명령 전송 (+역재생용 궤적 기록)
-        self.cmd_pub.send_right_full(arm_cmd.tolist(), hand_cmd.tolist())
-        self._traj.append((arm_cmd.copy(), np.asarray(hand_cmd, dtype=np.float64).copy()))
-
-        # 8.5 CSV per-step 기록 (action·관절·모터·센서·obj)
+        # CSV per-step 기록 (action·관절·모터·센서·obj)
         self.recorder.record(
-            step=self.step_count, is_lift=is_lift, action=action,
+            step=self.step_count, is_lift=out.is_lift, action=out.action,
             arm_pos=self.arm_pos, arm_vel=self.arm_vel, arm_eff=self.arm_eff,
             hand_pos=self.hand_pos, hand_eff=self.hand_eff,
-            tip_force=self.tip_force_raw, contact=tip_contact,
-            cup=self.cup_pos, palm=palm_center, dist=_pc_dist,
-            arm_cmd=arm_cmd, hand_cmd=hand_cmd,
+            tip_force=np.linalg.norm(out.tip_force_gated, axis=1),
+            contact=out.tip_contact,
+            cup=self.cup_pos, palm=out.palm_center, dist=out.palm_cup_dist,
+            arm_cmd=out.arm_cmd, hand_cmd=out.hand_cmd,
         )
 
         # 9. 스텝 → 완료 시 역재생(PLACING)으로 컵 반환
@@ -721,7 +527,9 @@ class GraspInferenceNode(Node):
             self.get_logger().info("PLACING 완료 — 컵 반환·pregrasp 복귀 → IDLE (재트리거 대기)")
             return
         arm_cmd, hand_cmd = self._traj[self._replay_idx]
-        self.cmd_pub.send_right_full(arm_cmd.tolist(), hand_cmd.tolist())
+        self.cmd_pub.send_side_full(
+            self.profile.acting_side, arm_cmd.tolist(), hand_cmd.tolist()
+        )
         self._replay_idx -= 1
 
 
@@ -729,20 +537,20 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--agent", required=True)
     parser.add_argument("--ckpt", required=True)
+    parser.add_argument("--robot", default="tesollo_bi_s__right",
+                        help="config/robots 의 구성 프로필 이름 (자산·토픽·관절·계약)")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--settle_time", type=float, default=4.0)
     parser.add_argument("--object", default="cup_big_s100",
                         help="잡는 물체 onehot id 또는 인덱스 (기본 cup_big_s100)")
-    parser.add_argument("--profile", default=DEFAULT_PROFILE,
-                        help="robot_control profile (source→canonical 관절 매핑)")
-    parser.add_argument("--episode-steps", type=int, default=EPISODE_STEPS,
-                        help=f"에피소드 길이[스텝] (sim 기본 {EPISODE_STEPS}, 1200=2배 천천히)")
+    parser.add_argument("--episode-steps", type=int, default=None,
+                        help="에피소드 길이[스텝]. 기본은 sim 계약(600). 1200=2배 천천히")
     parser.add_argument("--log-dir", default="~/rl_ws/sim2real/logs",
                         help="에피소드 CSV 저장 디렉토리")
-    parser.add_argument("--contact-threshold", type=float, default=CONTACT_FORCE_THRESHOLD,
-                        help="tip 접촉 판정 임계[N] (sim 기본 0.1 — 실물 무접촉 노이즈 위로)")
+    parser.add_argument("--contact-threshold", type=float, default=None,
+                        help="tip 접촉 판정 임계[N]. 기본은 sim 계약(0.1) — 실물 노이즈 위로 튜닝")
     parser.add_argument("--allow-hand-mismatch", action="store_true", default=False,
-                        help="start 손 자세 sanity 게이트(APPROACH 근방 검사) 우회")
+                        help="settle 후 손 피드백 추종 게이트 우회")
     args = parser.parse_args()
 
     obj: str | int
@@ -755,10 +563,10 @@ def main() -> None:
     node = GraspInferenceNode(
         agent_yaml=args.agent,
         checkpoint_path=args.ckpt,
+        robot=args.robot,
         device=args.device,
         settle_time=args.settle_time,
         object_name=obj,
-        profile_path=args.profile,
         allow_hand_mismatch=args.allow_hand_mismatch,
         contact_threshold=args.contact_threshold,
         episode_steps=args.episode_steps,

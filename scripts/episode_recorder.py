@@ -3,10 +3,10 @@
 
 한 에피소드 = 한 파일. 컬럼(고정 순서):
     t_sec, step, is_lift,
-    action_0..10,                     # policy 원출력 11D
+    action_0..20,                     # policy 원출력 21D (palm 6 + 손가락 15)
     arm_pos_0..6, arm_vel_0..6, arm_eff_0..6,      # canonical r_aj_*
     hand_pos_0..19, hand_eff_0..19,               # canonical r_hj_* (finger-major)
-    tip_force_0..4, contact_0..4,                 # 원시 힘[N] / 이진(게이트 후)
+    tip_force_0..4, contact_0..4,                 # 힘 norm[N] / 이진 (둘 다 게이트 후)
     cup_x, cup_y, cup_z, palm_x, palm_y, palm_z, dist,
     arm_cmd_0..6, hand_cmd_0..19                  # 전송 명령
 """
@@ -23,7 +23,7 @@ def _cols(prefix: str, n: int) -> list[str]:
 
 HEADER = (
     ["t_sec", "step", "is_lift"]
-    + _cols("action", 11)
+    + _cols("action", 21)
     + _cols("arm_pos", 7) + _cols("arm_vel", 7) + _cols("arm_eff", 7)
     + _cols("hand_pos", 20) + _cols("hand_eff", 20)
     + _cols("tip_force", 5) + _cols("contact", 5)
@@ -61,7 +61,7 @@ class EpisodeCsvRecorder:
         self,
         step: int,
         is_lift: bool,
-        action,        # (11,)
+        action,        # (21,)
         arm_pos, arm_vel, arm_eff,      # (7,)×3
         hand_pos, hand_eff,             # (20,)×2
         tip_force, contact,             # (5,)×2

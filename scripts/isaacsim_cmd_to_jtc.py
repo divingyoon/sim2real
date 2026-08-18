@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""브리지: /isaacsim/right_{arm,hand}_cmd (canonical) → robot_control JTC.
+"""브리지: /isaacsim/{side}_{arm,hand}_cmd (canonical) → robot_control JTC. (구성 프로필 기반)
 
 정책 노드(grasp_inference/pour_inference)가 발행하는 canonical 관절 명령을 robot_control
 컨트롤러가 받는 source 관절 순서·부호·한계로 변환해 단일포인트 JointTrajectory 로 스트리밍한다.
 robot_control 코드 무수정(Option B). robot PC(controllers 와 co-locate) 에서 실행 권장.
 
-실행 (robot PC):
-    python3 isaacsim_cmd_to_jtc.py \
-        [--profile ~/rl_ws/robot_control/src/robot_control/profiles/openarm_tesollo.yaml] \
-        [--arm-topic /right_joint_trajectory_controller/joint_trajectory] \
-        [--hand-topic /dg5f_right/dg5f_right_controller/joint_trajectory] \
-        [--control-dt 0.0167] [--max-vel 0.1]
+실행 (로봇 제어 머신):
+    python3 isaacsim_cmd_to_jtc.py --robot tesollo_bi_s__right \
+        [--control-dt 0.0167] [--max-vel 0.5] [--hand-max-vel 1.0]
 
-구독: /isaacsim/right_arm_cmd (Float64MultiArray, 7 canonical r_aj_1..7)
-      /isaacsim/right_hand_cmd (Float64MultiArray, 20 canonical r_hj_* finger-major)
-발행: <arm-topic>, <hand-topic> (trajectory_msgs/JointTrajectory, 단일포인트)
+관절 이름·토픽·한계는 전부 **구성 프로필**에서 온다(좌/우, 손/그리퍼 조합). 좌 Tesollo 는
+robot_control profile 에 항목이 없어 sim2real 로컬 보충 yaml 을 함께 병합한다.
+
+구독: <arm_cmd>  (Float64MultiArray, 7 canonical {r|l}_aj_1..7)
+      <ee_cmd>   (Float64MultiArray, 20 canonical {r|l}_hj_* finger-major)
+발행: <arm_traj>, <ee_traj> (trajectory_msgs/JointTrajectory, 단일포인트)
 
 ★ 컨트롤러 interpolation_method="none"(openarm_bimanual_controllers.yaml, 고주파 서보) 전제:
   time_from_start=0 으로 목표를 **즉시 적용**하고, 속도제한은 위치 클램프
@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import argparse
 import time
-from pathlib import Path
 
 import numpy as np
 import rclpy
@@ -36,23 +35,11 @@ from std_msgs.msg import Float64MultiArray
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from builtin_interfaces.msg import Duration
 
-from jtc_bridge_core import (
-    JointRemap,
-    load_profile_joints,
-    velocity_limited_target,
-)
+from jtc_bridge_core import JointRemap, velocity_limited_target
+from robot_profile import load_robot_profile
 
 CMD_TIMEOUT_SEC = 1.0   # 이 시간 내 새 명령이 없으면 발행 중지(JTC 자체 홀딩·robotctl 양보)
 
-ARM_CANON = [f"r_aj_{i}" for i in range(1, 8)]
-ARM_SOURCE = [f"openarm_right_joint{i}" for i in range(1, 8)]
-_FINGERS = ["thumb", "index", "middle", "ring", "pinky"]
-HAND_CANON = [f"r_hj_{f}_{j}" for f in _FINGERS for j in range(1, 5)]
-HAND_SOURCE = [f"rj_dg_{fi}_{j}" for fi in range(1, 6) for j in range(1, 5)]
-
-DEFAULT_PROFILE = str(
-    Path.home() / "rl_ws/robot_control/src/robot_control/profiles/openarm_tesollo.yaml"
-)
 
 
 def _duration(sec_float: float) -> Duration:
@@ -64,19 +51,25 @@ def _duration(sec_float: float) -> Duration:
 class IsaacsimCmdToJtc(Node):
     def __init__(
         self,
-        profile_path: str,
-        arm_topic: str,
-        hand_topic: str,
+        profile,
         control_dt: float,
         max_vel: float,
         hand_max_vel: float,
-        arm_state_topic: str,
-        hand_state_topic: str,
     ) -> None:
         super().__init__("isaacsim_cmd_to_jtc")
-        prof = load_profile_joints(profile_path)
-        self.arm_remap = JointRemap(ARM_CANON, ARM_SOURCE, prof)
-        self.hand_remap = JointRemap(HAND_CANON, HAND_SOURCE, prof)
+        self.profile = profile
+        arm_topic = profile.topics["arm_traj"]
+        hand_topic = profile.topics["ee_traj"]
+        arm_state_topic = profile.topics["arm_state"]
+        hand_state_topic = profile.topics["ee_state"]
+        self.arm_remap = JointRemap(
+            list(profile.arm_canonical), list(profile.arm_source), profile.joint_limits
+        )
+        self.hand_remap = JointRemap(
+            list(profile.ee_canonical), list(profile.ee_source), profile.joint_limits
+        )
+        self.n_arm = len(profile.arm_canonical)
+        self.n_hand = len(profile.ee_canonical)
         self.control_dt = float(control_dt)
         self.max_vel = float(max_vel)
         # 손은 팔과 요구 속도가 다르다(경량 손가락 vs 관성 큰 팔). 공용 0.1 rad/s 를 손에도
@@ -98,14 +91,14 @@ class IsaacsimCmdToJtc(Node):
 
         self.arm_pub = self.create_publisher(JointTrajectory, arm_topic, 10)
         self.hand_pub = self.create_publisher(JointTrajectory, hand_topic, 10)
-        self.create_subscription(Float64MultiArray, "/isaacsim/right_arm_cmd", self._arm_cb, 10)
-        self.create_subscription(Float64MultiArray, "/isaacsim/right_hand_cmd", self._hand_cb, 10)
+        self.create_subscription(Float64MultiArray, profile.topics["arm_cmd"], self._arm_cb, 10)
+        self.create_subscription(Float64MultiArray, profile.topics["ee_cmd"], self._hand_cb, 10)
         self.create_subscription(JointState, arm_state_topic, self._state_cb, 20)
         self.create_subscription(JointState, hand_state_topic, self._state_cb, 20)
         self.create_timer(self.control_dt, self._tick)
 
         self.get_logger().info(
-            f"브리지 준비: arm→{arm_topic}, hand→{hand_topic}\n"
+            f"브리지 준비 [{profile.name}]: arm→{arm_topic}, hand→{hand_topic}\n"
             f"  fabric_q 직접 추종 (rate-limit arm={self.max_vel} / hand={self.hand_max_vel} rad/s, time_from_start=0)\n"
             f"  제어주기 dt={self.control_dt*1000:.1f}ms · interpolation=none 전제 · 실제위치 클램프 없음\n"
             f"  상태구독: {arm_state_topic}, {hand_state_topic}\n"
@@ -124,10 +117,10 @@ class IsaacsimCmdToJtc(Node):
         self._cmd_rx[label] = time.monotonic()
 
     def _arm_cb(self, msg: Float64MultiArray) -> None:
-        self._store_target(self.arm_remap, msg.data, 7, "arm")
+        self._store_target(self.arm_remap, msg.data, self.n_arm, "arm")
 
     def _hand_cb(self, msg: Float64MultiArray) -> None:
-        self._store_target(self.hand_remap, msg.data, 20, "hand")
+        self._store_target(self.hand_remap, msg.data, self.n_hand, "hand")
 
     def _tick(self) -> None:
         """고정 주기(control_dt) 세트포인트 전진+발행 — 명령 rate 와 무관하게 max_vel 보장."""
@@ -172,29 +165,23 @@ class IsaacsimCmdToJtc(Node):
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--profile", default=DEFAULT_PROFILE)
-    parser.add_argument("--arm-topic", default="/right_joint_trajectory_controller/joint_trajectory")
-    parser.add_argument("--hand-topic", default="/dg5f_right/dg5f_right_controller/joint_trajectory")
+    parser.add_argument("--robot", default="tesollo_bi_s__right",
+                        help="config/robots 의 구성 프로필 이름 (관절·토픽·한계)")
     parser.add_argument("--control-dt", type=float, default=1.0 / 60.0,
                         help="제어 주기[s]. 위치클램프 속도제한 step = max_vel·control_dt")
     parser.add_argument("--max-vel", type=float, default=0.5,
-                        help="팔 세트포인트 rate-limit [rad/s]. fabric_q 를 이 속도로 추종(큰 점프만 부드럽게)")
+                        help="팔 세트포인트 rate-limit [rad/s]. fabric_q 를 이 속도로 추종")
     parser.add_argument("--hand-max-vel", type=float, default=1.0,
-                        help="손 세트포인트 rate-limit [rad/s]. APPROACH -1.57 rad 도달 ~1.6s")
-    parser.add_argument("--arm-state-topic", default="/joint_states")
-    parser.add_argument("--hand-state-topic", default="/dg5f_right/joint_states")
+                        help="손 세트포인트 rate-limit [rad/s]. APPROACH -1.57 도달 ~1.6s")
     args = parser.parse_args()
+    profile = load_robot_profile(args.robot)
 
     rclpy.init()
     node = IsaacsimCmdToJtc(
-        profile_path=args.profile,
-        arm_topic=args.arm_topic,
-        hand_topic=args.hand_topic,
+        profile=profile,
         control_dt=args.control_dt,
         max_vel=args.max_vel,
         hand_max_vel=args.hand_max_vel,
-        arm_state_topic=args.arm_state_topic,
-        hand_state_topic=args.hand_state_topic,
     )
     try:
         rclpy.spin(node)
