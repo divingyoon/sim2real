@@ -1,3 +1,10 @@
+> ⚠️ **DEPRECATED — 구 v7 계약(obs 106D / action 11D)**
+>
+> 현행 `grasp_v1` 계약은 **obs 154D / action 21D**, 진입점은
+> `scripts/grasp_inference.py --robot <구성 프로필>` 이다.
+> 계약 요약은 `docs/CONTRACT_grasp_v1_{right,left}.md`, 실행 절차는
+> `docs/RUNBOOK_GRASP_V1_LIVE.md` 를 보라. 이 문서는 이력 보존용이다.
+
 # sim2real Inference — 5g_grasp_right_v7
 
 학습된 `5g_grasp_right_v7` 정책을 실물 OpenArm + Teosllo 로봇에서 실행하는 파이프라인.

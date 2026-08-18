@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""sim2real dry-run 시각화 노드 (5g_grasp_right_v7).
+"""
+⚠️ **DEPRECATED — 구 v7 계약(obs 106D / action 11D)**
+   현행 grasp_v1 계약은 obs 154D / action 21D 이고, 진입점은
+   `grasp_inference.py --robot <구성>` 이다. 이 파일은 이력 보존용으로만 남긴다.
+   계약 요약: docs/CONTRACT_grasp_v1_{right,left}.md
+sim2real dry-run 시각화 노드 (5g_grasp_right_v7).
 
 실제 하드웨어 없이 정책 동작을 RViz로 시각화합니다.
 

@@ -1,3 +1,26 @@
+> ## ⚠️ 2026-08-18 갱신 — 먼저 읽을 것
+>
+> **머신 구성이 바뀌었다.** 이 문서 본문은 구 2-PC 전제(vision-3090 정책 + 5070ti 로봇)로
+> 쓰여 있다. 현행은:
+>
+> | 머신 | 역할 |
+> |---|---|
+> | **local 5090** | 로봇제어 + 정책추론 (CAN·손 이더넷·robot_control·브리지·grasp_inference) |
+> | **vision-3090** | 비전 전용 (RealSense + FP++ → `/cup_pose`) |
+>
+> 아래 §A(로봇)·§B(정책)는 **같은 머신(5090)** 에서 돌린다. 컵 pose 만 3090 에서 온다.
+>
+> **계약도 바뀌었다** — obs 114D→**154D**, action 11D→**21D**, 리셋은 컵 참값 pregrasp →
+> **고정 홈**. 접촉 토픽은 5D norm → **15D 3축**(`<tip_force_xyz>`).
+> 계약 전문: `docs/CONTRACT_grasp_v1_{right,left}.md`
+> 측정·격차 기록: `docs/measure/ACTION_CONTROL_DEMAND.md`
+>
+> **모든 노드가 `--robot <구성 프로필>` 을 받는다**(`config/robots/*.yaml`).
+> 좌/우와 손·그리퍼 조합이 여기서 결정된다. 기본값 `tesollo_bi_s__right`.
+>
+> **체크포인트 경로는 아직 확정 전이다** — 본문의 `lstm_test3` 경로는 **존재하지 않는다**.
+> 재학습(`lstm_test2`) 완료 후 갱신할 것.
+
 # grasp-v1 라이브 실행 런북 (2026-08-03 재정립)
 
 tesollo right grasp-v1 라이브 정책의 머신별 기동 명령. 커밋 62909aa(zeros 손 obs 방어 +
@@ -94,9 +117,10 @@ ros2 launch openarm_bringup openarm.bimanual.launch.py use_fake_hardware:=false
 ### A4. tip 접촉 변환 노드 (★손끝 무접촉 상태에서 기동 — bias 캡처)
 
 ```bash
-python3 ~/rl_ws/sim2real/scripts/tip_contact_pub.py
+python3 ~/rl_ws/sim2real/scripts/tip_contact_pub.py --robot tesollo_bi_s__right
 # bias 재캡처(무접촉 자세에서): ros2 service call /tip_contact/rebias std_srvs/srv/Trigger
-# 검증: ros2 topic echo /dg5f_right/contact_forces --once  → 무접촉 ~0, 컵 누르면 해당 tip 상승
+# 검증: ros2 topic echo /dg5f_right/tip_forces_xyz --once  → 15D(5×3), 무접촉 ~0,
+#       컵 누르면 해당 tip 3축이 움직임. (5D norm 은 /dg5f_right/contact_forces 로 병행 발행)
 ```
 
 - 임계 0.1N(CONTACT_FORCE_THRESHOLD)은 실물 노이즈 대비 튜닝 필요(무접촉 노이즈 < 0.1 확인).
@@ -105,7 +129,7 @@ python3 ~/rl_ws/sim2real/scripts/tip_contact_pub.py
 
 ```bash
 pkill -f isaacsim_cmd_to_jtc; sleep 1
-python3 ~/rl_ws/sim2real/scripts/isaacsim_cmd_to_jtc.py --max-vel 0.1
+python3 ~/rl_ws/sim2real/scripts/isaacsim_cmd_to_jtc.py --robot tesollo_bi_s__right --max-vel 0.1
 ```
 
 - max_vel 0.1은 후퇴 원인 아님(08.03 재현 실험으로 무죄 판정) — 그대로 시작, 추종지연 체감 시 상향.
@@ -172,9 +196,11 @@ source /opt/ros/humble/setup.bash
 source ~/grasp_infer_venv/bin/activate
 export ROS_DOMAIN_ID=126
 export FASTRTPS_DEFAULT_PROFILES_FILE=$HOME/fastdds_wired.xml
+# ⚠️ 아래 lstm_test3 경로는 존재하지 않는다 — 재학습(lstm_test2) 완료 후 갱신할 것.
 python3 ~/rl_ws/sim2real/scripts/grasp_inference.py \
-  --agent ~/rl_ws/hdgp/log/rl_games/open-tesol/right/grasp-v1/lstm_test3/params/agent.yaml \
-  --ckpt  ~/rl_ws/hdgp/log/rl_games/open-tesol/right/grasp-v1/lstm_test3/nn/last_open-tesol_r_grasp_v1-lstm_ep_20000_rew_9920.256.pth \
+  --robot tesollo_bi_s__right \
+  --agent <재학습 run>/params/agent.yaml \
+  --ckpt  <재학습 run>/nn/<최종>.pth \
   2>&1 | tee /tmp/grasp_infer.log
 ```
 
