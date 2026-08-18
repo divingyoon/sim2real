@@ -1,0 +1,50 @@
+# 로봇 구성 프로필 — OpenArm 양팔(DG-5FS 자산) 중 **우팔 + Tesollo DG-5F** 로 grasp_v1 수행.
+#
+# 이 파일이 존재하는 이유: 배포 노드가 Fabrics 자산·토픽·profile 경로를 하드코딩하고 있어
+# 로봇 구성이 바뀌면 조용히 틀렸다. 실제로 sim 이 openarm_tesollo → openarm_tesollo_bi_s 로
+# 이동(08.05)했을 때 배포는 구 자산에 머물러 palm 이 6.5cm 어긋난 채 동작했다.
+# asset.manifest 대조 검증이 그 부류를 기동 시점에 잡는다.
+name: tesollo_bi_s__right
+
+asset:
+  # ★진실원천. 관절 이름·순서를 이 매니페스트와 대조해 검증한다.
+  manifest: urdf/generated/rl/openarm_tesollo_bi_s_rl_manifest.yaml
+  fabrics:
+    # sim 학습과 **반드시 동일**해야 한다 — grasp_right_env.py 의 robot_dir_name/world.
+    # 기본값(openarm_tesollo)에 의존하지 말 것: palm 이 6.5cm 짧다(실측 0.12863 vs 0.1935).
+    robot_dir: openarm_tesollo_bi_s
+    robot_name: openarm_tesollo_bi_s
+    class: OpenArmTeoslloPoseFabric
+    world: open_tesollo_boxes_no_table
+
+acting_side: right
+
+end_effector:
+  type: tesollo_dg5f
+  dof: 20
+
+contract:
+  # 정책 계약. hdgp 상수를 import 해 대조하며, 불일치 시 예외.
+  hdgp_package: openarm.tesollo.right.grasp_v1
+  obs_dim: 154
+  action_dim: 21
+
+topics:
+  arm_state:      /joint_states
+  arm_cmd:        /isaacsim/right_arm_cmd
+  arm_traj:       /right_joint_trajectory_controller/joint_trajectory
+  ee_state:       /dg5f_right/joint_states
+  ee_cmd:         /isaacsim/right_hand_cmd
+  ee_traj:        /dg5f_right/dg5f_right_controller/joint_trajectory
+  tip_wrench_fmt: /dg5f_right/fingertip_{i}_broadcaster/wrench
+  tip_force_xyz:  /dg5f_right/tip_forces_xyz      # 15D, 정책 주경로
+  tip_force_norm: /dg5f_right/contact_forces      # 5D norm, 하위호환
+
+joint_profiles:
+  - ~/rl_ws/robot_control/src/robot_control/profiles/openarm_tesollo.yaml
+
+tip_sensor:
+  # ⚠️ 미검증: 실물 wrench 프레임이 URDF tip 링크와 같은지, 힘 부호 규약이 sim 과 같은지
+  # 확인된 바 없다. 캘리브 전까지 identity/+1 로 두고, 런북 절차로 확정할 것.
+  frame_rotation: identity
+  force_sign: 1.0

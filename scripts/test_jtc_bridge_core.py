@@ -170,11 +170,19 @@ def test_real_profile_arm_identity():
 
 @pytest.mark.skipif(not _PROFILE.exists(), reason="robot_control profile 없음")
 def test_real_profile_hand_identity_finger_major():
+    """r_hj_{finger}_{j} ↔ rj_dg_{fingerIdx}_{j} finger-major 동일 정렬, sign=1.
+
+    입력은 **관절별 실제 한계 안**에서 만든다. 과거 이 테스트는 손 한계를 ±1.5 로
+    가정했으나, profile 은 dg_description URDF 기준 비대칭 한계로 교정됐다
+    (엄지 j2 는 음수만, 나머지 손가락 j2 는 양수만). ±1.5 placeholder 가 손가락
+    4개를 스톱까지 밀었던 것이 그 교정의 계기다.
+    """
     prof = load_profile_joints(_PROFILE)
     remap = JointRemap(HAND_CANON, HAND_SOURCE, prof)
-    vals = np.linspace(-1.0, 1.0, 20)
+    lo = np.array([prof[c]["lower"] for c in HAND_CANON])
+    hi = np.array([prof[c]["upper"] for c in HAND_CANON])
+    vals = lo + 0.5 * (hi - lo)          # 각 관절 한계의 중점 = clamp 무관
     out = remap.apply(vals)
-    # r_hj_{finger}_{j} ↔ rj_dg_{fingerIdx}_{j} finger-major 동일 정렬, sign=1, 한계 ±1.5 내
     assert np.allclose(out, vals)
 
 
@@ -182,9 +190,10 @@ def test_real_profile_hand_identity_finger_major():
 def test_real_profile_hand_clamps_to_limits():
     prof = load_profile_joints(_PROFILE)
     remap = JointRemap(HAND_CANON, HAND_SOURCE, prof)
-    out = remap.apply(np.full(20, 5.0))   # 한계 초과
-    assert np.all(out <= 1.5 + 1e-9)      # 손 관절 upper 1.5
-    assert np.all(out >= -1.5 - 1e-9)
+    lo = np.array([prof[c]["lower"] for c in HAND_CANON])
+    hi = np.array([prof[c]["upper"] for c in HAND_CANON])
+    assert np.allclose(remap.apply(np.full(20, +50.0)), hi)   # 상한 초과 → upper 로 clamp
+    assert np.allclose(remap.apply(np.full(20, -50.0)), lo)   # 하한 초과 → lower 로 clamp
 
 
 @pytest.mark.skipif(not _PROFILE.exists(), reason="robot_control profile 없음")

@@ -1,0 +1,33 @@
+# 좌 Tesollo DG-5F 20관절 canonical↔source 보충 프로필.
+#
+# 왜 있는가: robot_control profile(openarm_tesollo.yaml)은 좌측 EE 로 2지 그리퍼
+# (l_hj_gripper_1)만 담고 있어 좌 Tesollo 매핑이 없다. upstream 에 좌손 항목이
+# 들어오면 **이 파일을 삭제**하고 joint_profiles 목록에서 빼라.
+#
+# 유도 규칙(검증됨): 우손 profile 항목의 lower/upper 를 grasp_left_preset.py
+# `_HAND_SIGN`(thumb[-1,-1,-1,-1] / index·middle·ring[-1,+1,+1,+1] / pinky[-1,-1,+1,+1])
+# 이 -1 인 관절만 부호반전+스왑. sign 은 전 관절 +1.
+# 벤더 좌손 URDF(urdf/vendor/delto_m_ros2/dg_description/urdf/dg5f_left.urdf)의
+# lj_dg_* limit 과 **20/20 일치** 확인함.
+name: openarm_tesollo_left_hand
+joints:
+  - {canonical: l_hj_thumb_1, source: lj_dg_1_1, sign: 1, unit: rad, lower: -0.890118, upper: 0.383972, velocity: 2.0, effort: 7.5}
+  - {canonical: l_hj_thumb_2, source: lj_dg_1_2, sign: 1, unit: rad, lower: 0.000000, upper: 3.141593, velocity: 2.0, effort: 7.5}
+  - {canonical: l_hj_thumb_3, source: lj_dg_1_3, sign: 1, unit: rad, lower: -1.570796, upper: 1.570796, velocity: 2.0, effort: 7.5}
+  - {canonical: l_hj_thumb_4, source: lj_dg_1_4, sign: 1, unit: rad, lower: -1.570796, upper: 1.570796, velocity: 2.0, effort: 7.5}
+  - {canonical: l_hj_index_1, source: lj_dg_2_1, sign: 1, unit: rad, lower: -0.610865, upper: 0.418879, velocity: 2.0, effort: 7.5}
+  - {canonical: l_hj_index_2, source: lj_dg_2_2, sign: 1, unit: rad, lower: 0.000000, upper: 2.007129, velocity: 2.0, effort: 7.5}
+  - {canonical: l_hj_index_3, source: lj_dg_2_3, sign: 1, unit: rad, lower: -1.570796, upper: 1.570796, velocity: 2.0, effort: 7.5}
+  - {canonical: l_hj_index_4, source: lj_dg_2_4, sign: 1, unit: rad, lower: -1.570796, upper: 1.570796, velocity: 2.0, effort: 7.5}
+  - {canonical: l_hj_middle_1, source: lj_dg_3_1, sign: 1, unit: rad, lower: -0.610865, upper: 0.610865, velocity: 2.0, effort: 7.5}
+  - {canonical: l_hj_middle_2, source: lj_dg_3_2, sign: 1, unit: rad, lower: 0.000000, upper: 1.954769, velocity: 2.0, effort: 7.5}
+  - {canonical: l_hj_middle_3, source: lj_dg_3_3, sign: 1, unit: rad, lower: -1.570796, upper: 1.570796, velocity: 2.0, effort: 7.5}
+  - {canonical: l_hj_middle_4, source: lj_dg_3_4, sign: 1, unit: rad, lower: -1.570796, upper: 1.570796, velocity: 2.0, effort: 7.5}
+  - {canonical: l_hj_ring_1, source: lj_dg_4_1, sign: 1, unit: rad, lower: -0.418879, upper: 0.610865, velocity: 2.0, effort: 7.5}
+  - {canonical: l_hj_ring_2, source: lj_dg_4_2, sign: 1, unit: rad, lower: 0.000000, upper: 1.902409, velocity: 2.0, effort: 7.5}
+  - {canonical: l_hj_ring_3, source: lj_dg_4_3, sign: 1, unit: rad, lower: -1.570796, upper: 1.570796, velocity: 2.0, effort: 7.5}
+  - {canonical: l_hj_ring_4, source: lj_dg_4_4, sign: 1, unit: rad, lower: -1.570796, upper: 1.570796, velocity: 2.0, effort: 7.5}
+  - {canonical: l_hj_pinky_1, source: lj_dg_5_1, sign: 1, unit: rad, lower: -1.047198, upper: 0.017453, velocity: 2.0, effort: 7.5}
+  - {canonical: l_hj_pinky_2, source: lj_dg_5_2, sign: 1, unit: rad, lower: -0.610865, upper: 0.418879, velocity: 2.0, effort: 7.5}
+  - {canonical: l_hj_pinky_3, source: lj_dg_5_3, sign: 1, unit: rad, lower: -1.570796, upper: 1.570796, velocity: 2.0, effort: 7.5}
+  - {canonical: l_hj_pinky_4, source: lj_dg_5_4, sign: 1, unit: rad, lower: -1.570796, upper: 1.570796, velocity: 2.0, effort: 7.5}

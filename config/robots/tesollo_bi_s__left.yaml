@@ -1,0 +1,48 @@
+# 로봇 구성 프로필 — OpenArm 양팔(DG-5FS 자산) 중 **좌팔 + Tesollo DG-5F** 로 grasp_v1 수행.
+#
+# ⚠️ 실기 좌팔 끝단은 현재 2지 그리퍼다. 좌 DG-5F 장착 전까지 이 구성은
+#    오프라인(grasp_loop_sim)까지만 검증 가능하고 라이브 기동은 불가하다.
+#
+# ★좌우 미러 주의: palm delta 액션은 **미러되지 않는다**(좌우 모두 palm_delta_xyz[1]=+0.35).
+#   정책이 side 별로 학습되므로 배포에서 부호를 만지면 안 된다.
+name: tesollo_bi_s__left
+
+asset:
+  manifest: urdf/generated/rl/openarm_tesollo_bi_s_rl_manifest.yaml
+  fabrics:
+    # sim 학습과 동일 — grasp_left_env.py:539,563
+    robot_dir: openarm_tesollo_bi_s_left
+    robot_name: openarm_tesollo_bi_s_left
+    class: OpenArmTeoslloLeftPoseFabric
+    world: open_tesollo_left_boxes_no_table
+
+acting_side: left
+
+end_effector:
+  type: tesollo_dg5f
+  dof: 20
+
+contract:
+  hdgp_package: openarm.tesollo.left.grasp_v1
+  obs_dim: 154
+  action_dim: 21
+
+topics:
+  arm_state:      /joint_states
+  arm_cmd:        /isaacsim/left_arm_cmd
+  arm_traj:       /left_joint_trajectory_controller/joint_trajectory
+  ee_state:       /dg5f_left/joint_states
+  ee_cmd:         /isaacsim/left_hand_cmd
+  ee_traj:        /dg5f_left/dg5f_left_controller/joint_trajectory
+  tip_wrench_fmt: /dg5f_left/fingertip_{i}_broadcaster/wrench
+  tip_force_xyz:  /dg5f_left/tip_forces_xyz
+  tip_force_norm: /dg5f_left/contact_forces
+
+joint_profiles:
+  - ~/rl_ws/robot_control/src/robot_control/profiles/openarm_tesollo.yaml
+  # 좌 Tesollo 보충 — upstream 반영 시 이 줄과 파일을 함께 삭제
+  - config/openarm_tesollo_left_hand.yaml
+
+tip_sensor:
+  frame_rotation: identity
+  force_sign: 1.0
