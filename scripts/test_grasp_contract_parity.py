@@ -27,6 +27,8 @@ if str(_SCRIPT_DIR) not in sys.path:
 
 from robot_profile import (  # noqa: E402
     HDGP_OPENARM_SRC,
+    available_profiles,
+    hdgp_task_dir,
     load_hdgp_module,
     load_profile_env_cfg,
     load_robot_profile,
@@ -37,25 +39,36 @@ import grasp_obs_builder as O  # noqa: E402
 
 SIDES = ["right", "left"]
 PROFILES = {"right": "tesollo_bi_s__right", "left": "tesollo_bi_s__left"}
+# ★모든 구성(grasp_v1 좌/우, grasp_sensor …)을 자동으로 덮는다.
+ALL_PROFILES = available_profiles()
 
 pytestmark = pytest.mark.skipif(not HDGP_OPENARM_SRC.exists(), reason="hdgp 소스 없음")
 
 
+def _env_path_for(profile) -> Path:
+    return hdgp_task_dir(profile) / f"grasp_{profile.acting_side}_env.py"
+
+
 def _env_path(side: str) -> Path:
-    return HDGP_OPENARM_SRC / "openarm" / "tesollo" / side / "grasp_v1" / f"grasp_{side}_env.py"
+    """bi_s 좌우 쌍 전용(동형성 비교)."""
+    return _env_path_for(load_robot_profile(PROFILES[side]))
+
+
+def _consts_of(name: str):
+    return load_hdgp_module(load_robot_profile(name), "constants")
 
 
 def _consts(side: str):
-    return load_hdgp_module(load_robot_profile(PROFILES[side]), "constants")
+    return _consts_of(PROFILES[side])
 
 
 # --------------------------------------------------------------------------
 # (a) 상수 parity — 배포가 복제한 값이 sim 과 같은가
 # --------------------------------------------------------------------------
 
-@pytest.mark.parametrize("side", SIDES)
-def test_dimension_constants(side):
-    C = _consts(side)
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_dimension_constants(name):
+    C = _consts_of(name)
     assert O.ACTOR_OBS_DIM == C.NUM_OBSERVATIONS
     assert D.NUM_ACTIONS == C.NUM_ACTIONS
     assert O.NUM_ACTIONS == C.NUM_ACTIONS
@@ -67,26 +80,26 @@ def test_dimension_constants(side):
     assert O.NUM_OBJECT_CLASSES == C.NUM_OBJECT_CLASSES
 
 
-@pytest.mark.parametrize("side", SIDES)
-def test_normalization_constants(side):
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_normalization_constants(name):
     """정규화 상수가 어긋나면 obs 스케일이 통째로 달라진다(조용한 실패)."""
-    C = _consts(side)
+    C = _consts_of(name)
     assert O.CONTACT_FORCE_MAX == C.CONTACT_FORCE_MAX
     assert O.JOINT_POS_ERR_MAX == C.JOINT_POS_ERR_MAX
 
 
-@pytest.mark.parametrize("side", SIDES)
-def test_segment_dims_sum_to_contract(side):
-    C = _consts(side)
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_segment_dims_sum_to_contract(name):
+    C = _consts_of(name)
     assert sum(d for _, d in O.OBS_SEGMENTS) == C.NUM_OBSERVATIONS
     assert D.NUM_PALM_ACTION + D.NUM_FINGER_ACTION == C.NUM_ACTIONS
 
 
-@pytest.mark.parametrize("side", SIDES)
-def test_profile_contract_matches_constants(side):
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_profile_contract_matches_constants(name):
     """구성 프로필이 선언한 계약도 같아야 한다(로드 시 검증되지만 명시적으로 고정)."""
-    C = _consts(side)
-    p = load_robot_profile(PROFILES[side])
+    C = _consts_of(name)
+    p = load_robot_profile(name)
     assert p.contract.obs_dim == C.NUM_OBSERVATIONS
     assert p.contract.action_dim == C.NUM_ACTIONS
 
@@ -95,12 +108,12 @@ def test_profile_contract_matches_constants(side):
 # (b) obs 세그먼트 순서 — sim `_get_observations` 의 torch.cat 과 대조
 # --------------------------------------------------------------------------
 
-def _sim_actor_segments(side: str) -> list[str]:
+def _sim_actor_segments(name: str) -> list[str]:
     """`actor_obs = torch.cat([...])` 의 식별자 시퀀스를 소스에서 뽑는다."""
-    src = _env_path(side).read_text()
+    src = _env_path_for(load_robot_profile(name)).read_text()
     m = re.search(r"actor_obs\s*=\s*torch\.cat\(\s*\[(.*?)\]\s*,", src, re.S)
     if not m:
-        pytest.skip(f"{side}: actor_obs torch.cat 블록을 찾지 못함")
+        pytest.skip(f"{name}: actor_obs torch.cat 블록을 찾지 못함")
     names = []
     for line in m.group(1).splitlines():
         line = line.split("#")[0].strip().rstrip(",").strip()
@@ -109,10 +122,10 @@ def _sim_actor_segments(side: str) -> list[str]:
     return names
 
 
-@pytest.mark.parametrize("side", SIDES)
-def test_obs_segment_order_matches_sim(side):
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_obs_segment_order_matches_sim(name):
     """★sim 이 세그먼트를 재배열/추가하면 즉시 RED."""
-    sim = _sim_actor_segments(side)
+    sim = _sim_actor_segments(name)
     local = [name for name, _ in O.OBS_SEGMENTS]
     assert sim == local, (
         f"obs 세그먼트 순서 불일치\n  sim   {sim}\n  배포  {local}\n"
@@ -125,9 +138,9 @@ def test_obs_segment_order_matches_sim(side):
 #     여기서는 **계약이 유지되고 있는지**(액션 미러 금지 등)를 고정한다.
 # --------------------------------------------------------------------------
 
-@pytest.mark.parametrize("side", SIDES)
-def test_cfg_gate_flags(side):
-    cfg = load_profile_env_cfg(load_robot_profile(PROFILES[side]))
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_cfg_gate_flags(name):
+    cfg = load_profile_env_cfg(load_robot_profile(name))
     assert cfg["couple_four_fingers"] is True, "4지 공통닫힘이 꺼지면 3지 국소최적이 돌아온다"
     assert cfg["retighten_after_latch"] is False, (
         "sim 이 retighten 을 켰다면 배포 디코더도 같이 켜야 한다"
@@ -191,21 +204,20 @@ def test_left_right_finger_logic_identical():
 # (e) 수치 parity — hdgp utils 직접 호출 (구 test_grasp_decoder_parity 흡수)
 # --------------------------------------------------------------------------
 
-def _utils(side: str):
-    path = HDGP_OPENARM_SRC / "openarm" / "tesollo" / side / "grasp_v1" / f"grasp_{side}_utils.py"
+def _utils(name: str):
+    p = load_robot_profile(name)
+    path = hdgp_task_dir(p) / f"grasp_{p.acting_side}_utils.py"
     if not path.exists():
-        pytest.skip(f"{side}: utils 없음")
+        pytest.skip(f"{name}: utils 없음")
     pytest.importorskip("torch")
-    import importlib
-
-    return importlib.import_module(f"openarm.tesollo.{side}.grasp_v1.grasp_{side}_utils")
+    return load_hdgp_module(p, "utils")
 
 
-@pytest.mark.parametrize("side", SIDES)
-def test_scale_matches_sim(side):
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_scale_matches_sim(name):
     import torch
 
-    U = _utils(side)
+    U = _utils(name)
     rng = np.random.RandomState(0)
     a = rng.uniform(-1, 1, 6)
     lo = np.array([-0.15, -0.35, -0.15, -0.35, -0.35, -0.35])
@@ -217,12 +229,12 @@ def test_scale_matches_sim(side):
     assert np.allclose(mine, theirs, atol=1e-12)
 
 
-@pytest.mark.parametrize("side", SIDES)
-def test_joint7_lift_wait_matches_sim(side):
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_joint7_lift_wait_matches_sim(name):
     import torch
 
-    U = _utils(side)
-    cfg = load_profile_env_cfg(load_robot_profile(PROFILES[side]))
+    U = _utils(name)
+    cfg = load_profile_env_cfg(load_robot_profile(name))
     arm = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7])
     mine = D.joint7_lift_wait_target(
         arm, joint7_delta=cfg["lift_wait_joint7_delta"],
@@ -236,12 +248,12 @@ def test_joint7_lift_wait_matches_sim(side):
     assert np.allclose(mine, theirs, atol=1e-12)
 
 
-@pytest.mark.parametrize("side", SIDES)
-def test_lift_latch_matches_sim_sequence(side):
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_lift_latch_matches_sim_sequence(name):
     import torch
 
-    U = _utils(side)
-    cfg = load_profile_env_cfg(load_robot_profile(PROFILES[side]))
+    U = _utils(name)
+    cfg = load_profile_env_cfg(load_robot_profile(name))
     latch = D.LiftLatch(min_contacts=cfg["lift_start_min_grip_fingers"],
                         hold_steps=cfg["grasp_ready_hold_steps"])
     hold = torch.zeros(1, dtype=torch.long)
@@ -284,11 +296,11 @@ def _sim_finger_reference(action15, tip, close_buf, rate, couple, hand_open, han
     return buf, hand_open + buf * (hand_full - hand_open)
 
 
-@pytest.mark.parametrize("side", SIDES)
-def test_finger_integrator_matches_sim_reference(side):
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_finger_integrator_matches_sim_reference(name):
     """랜덤 200스텝에서 배포 디코더 == sim 전사본."""
-    cfg = load_profile_env_cfg(load_robot_profile(PROFILES[side]))
-    preset = load_hdgp_module(load_robot_profile(PROFILES[side]), "preset")
+    cfg = load_profile_env_cfg(load_robot_profile(name))
+    preset = load_hdgp_module(load_robot_profile(name), "preset")
     hand_open = np.asarray(preset.HAND_APPROACH_POSE, dtype=np.float64)
     hand_full = np.asarray(preset.HAND_FULL_GRIP_POSE, dtype=np.float64)
     rate = cfg["finger_close_speed"]

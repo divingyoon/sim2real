@@ -27,6 +27,7 @@ from grasp_policy_core import (  # noqa: E402
 )
 from robot_profile import (  # noqa: E402
     HDGP_OPENARM_SRC,
+    available_profiles,
     load_hdgp_module,
     load_profile_env_cfg,
     load_robot_profile,
@@ -34,12 +35,17 @@ from robot_profile import (  # noqa: E402
 
 PROFILES = {"right": "tesollo_bi_s__right", "left": "tesollo_bi_s__left"}
 SIDES = ["right", "left"]
+ALL_PROFILES = available_profiles()
 
 pytestmark = pytest.mark.skipif(not HDGP_OPENARM_SRC.exists(), reason="hdgp 소스 없음")
 
 
 def _ctx(side):
-    prof = load_robot_profile(PROFILES[side])
+    return _ctx_by_name(PROFILES[side])
+
+
+def _ctx_by_name(name):
+    prof = load_robot_profile(name)
     cfg = load_profile_env_cfg(prof)
     preset = load_hdgp_module(prof, "preset")
     mins = np.asarray(preset.palm_pose_mins(cfg["max_pose_angle"]), dtype=float)
@@ -64,10 +70,10 @@ def test_home_pose_wrong_length_raises():
         home_pose_to_radians((0.1, 0.2, 0.3))
 
 
-@pytest.mark.parametrize("side", SIDES)
-def test_configured_home_is_inside_workspace(side):
-    """실제 cfg 홈이 palm workspace 안이어야 한다(양측)."""
-    _, _, home, mins, maxs = _ctx(side)
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_configured_home_is_inside_workspace(name):
+    """모든 구성의 cfg 홈이 palm workspace 안이어야 한다."""
+    _, _, home, mins, maxs = _ctx_by_name(name)
     validate_home_in_workspace(home, mins, maxs)
 
 
@@ -97,19 +103,26 @@ def test_clamp_range_relaxed_to_include_home():
     assert np.allclose(palm_target_from_delta(home, np.zeros(6), mins, maxs), home)
 
 
-@pytest.mark.parametrize("side,cup_y", [("right", -0.10), ("left", 0.10)])
-def test_palm_delta_y_reaches_far_cup(side, cup_y):
-    """★도달성: 홈 y(∓0.38)에서 가장 먼 컵 y(∓0.10)까지 닿아야 한다.
+def _far_cup_y(cfg, home_y: float) -> float:
+    """스폰 박스에서 홈으로부터 **가장 먼** 컵 y 를 유도한다(하드코딩 금지)."""
+    c = cfg.get("object_spawn_y_center")
+    r = cfg.get("object_spawn_y_range")
+    if c is None or r is None:
+        pytest.skip("cfg 에 스폰 y 박스가 없다")
+    return max(c - r, c + r, key=lambda v: abs(v - home_y))
 
-    스폰 박스 y = 우측 [-0.30,-0.10] / 좌측 [+0.10,+0.30] → 필요 |Δy| = 0.28.
-    palm_delta_xyz[1]=0.35 이면 도달, 구 스칼라 0.15 면 **구조적 불가**.
+
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_palm_delta_y_reaches_far_cup(name):
+    """★도달성: 홈에서 스폰 박스의 **가장 먼** 컵까지 palm 이 닿아야 한다.
+
+    구 스칼라 palm_delta 0.15 로는 구조적 불가였다(필요 0.28 m).
     """
-    _, cfg, home, mins, maxs = _ctx(side)
+    _, cfg, home, mins, maxs = _ctx_by_name(name)
+    cup_y = _far_cup_y(cfg, home[1])
     need = abs(cup_y - home[1])
-    assert need == pytest.approx(0.28, abs=1e-9)
-
     dy = cfg["palm_delta_xyz"][1]
-    assert dy >= need, f"palm_delta_y={dy} < 필요 {need}"
+    assert dy >= need, f"{name}: palm_delta_y={dy} < 필요 {need:.3f}"
 
     delta = np.zeros(6)
     delta[1] = dy if cup_y > home[1] else -dy
@@ -117,10 +130,11 @@ def test_palm_delta_y_reaches_far_cup(side, cup_y):
     assert abs(reached - home[1]) >= need - 1e-9
 
 
-@pytest.mark.parametrize("side,cup_y", [("right", -0.10), ("left", 0.10)])
-def test_old_scalar_delta_cannot_reach(side, cup_y):
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_old_scalar_delta_cannot_reach(name):
     """구 스칼라 0.15 로는 못 간다 — 회귀가 되살아나면 여기서 잡힌다."""
-    _, _, home, mins, maxs = _ctx(side)
+    _, cfg, home, mins, maxs = _ctx_by_name(name)
+    cup_y = _far_cup_y(cfg, home[1])
     delta = np.zeros(6)
     delta[1] = 0.15 if cup_y > home[1] else -0.15
     reached = palm_target_from_delta(home, delta, mins, maxs)[1]

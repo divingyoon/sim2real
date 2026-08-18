@@ -321,6 +321,10 @@ def load_env_cfg_literals(path: Path) -> dict[str, object]:
     return out
 
 
+# 있으면 함께 싣는 키(구성에 따라 없을 수 있어 필수는 아니다)
+CFG_KEYS_OPTIONAL = ("object_spawn_x_center", "object_spawn_y_center",
+                     "object_spawn_x_range", "object_spawn_y_range")
+
 CFG_KEYS_REQUIRED = (
     "max_pose_angle", "palm_delta_xyz", "palm_delta_rot_deg", "reset_home_palm_pose",
     "fabrics_dt", "fabric_decimation", "fabrics_damping_gain", "fabrics_max_objects_per_env",
@@ -333,8 +337,7 @@ CFG_KEYS_REQUIRED = (
 def load_profile_env_cfg(profile: RobotProfile) -> dict[str, object]:
     """구성에 대응하는 env_cfg 리터럴 + 코드 상수. 누락 키가 있으면 예외."""
     side = profile.acting_side
-    pkg_rel = Path(profile.contract.hdgp_package.replace(".", "/"))
-    path = HDGP_OPENARM_SRC / pkg_rel / f"grasp_{side}_env_cfg.py"
+    path = hdgp_task_dir(profile) / f"grasp_{side}_env_cfg.py"
     if not path.exists():
         raise FileNotFoundError(f"env_cfg 소스 없음: {path}")
     cfg = load_env_cfg_literals(path)
@@ -342,6 +345,7 @@ def load_profile_env_cfg(profile: RobotProfile) -> dict[str, object]:
     if missing:
         raise ValueError(f"{path}: 필요한 cfg 키 누락 {missing}")
     picked = {k: cfg[k] for k in CFG_KEYS_REQUIRED}
+    picked.update({k: cfg[k] for k in CFG_KEYS_OPTIONAL if k in cfg})
     picked["reset_fabrics_damping_gain"] = RESET_FABRICS_DAMPING_GAIN
     return picked
 
@@ -354,8 +358,7 @@ def load_arm_mirror_sign(profile: RobotProfile) -> list[float]:
     검증이 조용히 통과**한다(실제로 그 상태였다).
     """
     side = profile.acting_side
-    pkg_rel = Path(profile.contract.hdgp_package.replace(".", "/"))
-    path = HDGP_OPENARM_SRC / pkg_rel / f"grasp_{side}_env.py"
+    path = hdgp_task_dir(profile) / f"grasp_{side}_env.py"
     if not path.exists():
         raise FileNotFoundError(f"env 소스 없음: {path}")
     tree = ast.parse(path.read_text())
@@ -387,3 +390,16 @@ def expected_q_home_arm(profile: RobotProfile) -> "list[float]":
         raise KeyError(f"{other}_ARM_REST_JOINT_POS 에 없는 관절: {missing}")
     sign = load_arm_mirror_sign(profile)
     return [float(sg) * float(rest[k]) for sg, k in zip(sign[:7], keys)]
+
+
+def available_profiles() -> list[str]:
+    """`config/robots/` 의 구성 프로필 이름 목록(정렬).
+
+    테스트가 이걸로 파라미터화하면 **새 구성을 추가하는 순간 자동으로 검증 대상**이 된다.
+    """
+    return sorted(p.stem for p in ROBOT_CONFIG_DIR.glob("*.yaml"))
+
+
+def hdgp_task_dir(profile: RobotProfile) -> Path:
+    """구성에 대응하는 hdgp 태스크 소스 디렉토리."""
+    return HDGP_OPENARM_SRC / Path(profile.contract.hdgp_package.replace(".", "/"))

@@ -23,13 +23,18 @@ if str(_SCRIPT_DIR) not in sys.path:
 from robot_profile import (  # noqa: E402
     HDGP_OPENARM_SRC,
     ROBOT_CONFIG_DIR,
+    available_profiles,
     ee_limit_arrays,
+    hdgp_task_dir,
     load_joint_profiles,
     load_robot_profile,
 )
 
 SIDES = ["right", "left"]
+# bi_s 좌우 쌍 — 미러 관계 검증 전용
 PROFILES = {"right": "tesollo_bi_s__right", "left": "tesollo_bi_s__left"}
+# ★모든 구성을 자동으로 덮는다. 새 프로필을 추가하면 즉시 검증 대상이 된다.
+ALL_PROFILES = available_profiles()
 
 # grasp_left_preset.py `_HAND_SIGN` — 손가락별 4관절 좌우 미러 부호(07-28 FK 확정)
 HAND_SIGN = {
@@ -41,20 +46,20 @@ HAND_SIGN = {
 }
 
 
-@pytest.mark.parametrize("side", SIDES)
-def test_profile_loads(side):
-    p = load_robot_profile(PROFILES[side])
-    assert p.acting_side == side
-    assert p.ee_type == "tesollo_dg5f"
-    assert p.ee_dof == 20
-    assert p.contract.obs_dim == 154
-    assert p.contract.action_dim == 21
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_profile_loads(name):
+    """모든 구성이 매니페스트·계약 검증을 통과해야 한다."""
+    p = load_robot_profile(name)
+    assert p.acting_side in ("right", "left")
+    assert p.ee_dof == len(p.ee_canonical)
+    assert p.contract.obs_dim > 0 and p.contract.action_dim > 0
+    assert len(p.arm_canonical) == len(p.arm_source) == 7
 
 
-@pytest.mark.parametrize("side", SIDES)
-def test_joint_names_follow_manifest(side):
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_joint_names_follow_manifest(name):
     """관절 이름·순서의 진실원천은 자산 매니페스트다."""
-    p = load_robot_profile(PROFILES[side])
+    p = load_robot_profile(name)
     prefix = p.side_prefix
     assert p.arm_canonical == tuple(f"{prefix}_aj_{i}" for i in range(1, 8))
     fingers = ["thumb", "index", "middle", "ring", "pinky"]
@@ -105,33 +110,39 @@ def test_ee_limits_mirror_between_sides():
 # ★자산 신원 — 이 테스트가 6.5cm palm 어긋남의 재발 방어선이다
 # --------------------------------------------------------------------------
 
-def _sim_fabrics_assets(side: str) -> set[str]:
-    """hdgp env 소스에서 실제로 쓰는 robot_dir_name 을 뽑는다(Isaac 없이 정규식)."""
-    env = (HDGP_OPENARM_SRC / "openarm" / "tesollo" / side / "grasp_v1"
-           / f"grasp_{side}_env.py")
+def _sim_fabrics_assets(profile) -> set[str]:
+    """해당 태스크의 env 소스에서 실제로 쓰는 robot_dir_name 을 뽑는다(Isaac 없이 정규식)."""
+    env = hdgp_task_dir(profile) / f"grasp_{profile.acting_side}_env.py"
     if not env.exists():
-        pytest.skip(f"hdgp grasp_v1 소스 없음: {env}")
+        pytest.skip(f"hdgp 태스크 소스 없음: {env}")
     return set(re.findall(r'robot_dir_name\s*=\s*"([^"]+)"', env.read_text()))
 
 
-@pytest.mark.parametrize("side", SIDES)
-def test_fabrics_asset_matches_sim(side):
-    """프로필의 Fabrics 자산이 **학습 sim 과 동일**해야 한다."""
-    p = load_robot_profile(PROFILES[side])
-    sim_assets = _sim_fabrics_assets(side)
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_fabrics_asset_matches_sim(name):
+    """프로필의 Fabrics 자산이 **학습 sim 과 동일**해야 한다.
+
+    구성마다 자산이 다르다: grasp_v1 은 bi_s(DG-5FS), grasp_sensor 는 openarm_tesollo
+    (DG-5F 원본). palm 이 6.5cm 다르므로 혼용하면 obs 36차원과 IK 가 동시에 틀린다.
+    """
+    p = load_robot_profile(name)
+    sim_assets = _sim_fabrics_assets(p)
     assert sim_assets, f"{side} env 에서 robot_dir_name 을 찾지 못함"
     assert p.fabrics.robot_dir in sim_assets, (
-        f"Fabrics 자산 불일치: 프로필 {p.fabrics.robot_dir!r} vs sim {sorted(sim_assets)}\n"
-        "  구 자산(openarm_tesollo)은 palm 이 6.5cm 짧다 — obs 36차원과 IK 목표가 동시에 틀린다."
+        f"Fabrics 자산 불일치 [{name}]: 프로필 {p.fabrics.robot_dir!r} vs sim {sorted(sim_assets)}\n"
+        "  bi_s(DG-5FS) 와 openarm_tesollo(DG-5F) 는 palm 이 6.5cm 다르다 — 구성별로 맞춰야 한다."
     )
 
 
-@pytest.mark.parametrize("side,world", [
-    ("right", "open_tesollo_boxes_no_table"),
-    ("left", "open_tesollo_left_boxes_no_table"),
-])
-def test_fabrics_world(side, world):
-    assert load_robot_profile(PROFILES[side]).fabrics.world == world
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_fabrics_world_matches_sim(name):
+    """world 도 sim 과 같아야 한다(좌측은 전용 world)."""
+    p = load_robot_profile(name)
+    env = hdgp_task_dir(p) / f"grasp_{p.acting_side}_env.py"
+    if not env.exists():
+        pytest.skip("hdgp 태스크 소스 없음")
+    worlds = set(re.findall(r'world_filename\s*=\s*"([^"]+)"', env.read_text()))
+    assert p.fabrics.world in worlds, f"{name}: {p.fabrics.world!r} vs sim {sorted(worlds)}"
 
 
 # --------------------------------------------------------------------------
