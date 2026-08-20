@@ -72,6 +72,7 @@ from std_msgs.msg import Float64MultiArray
 from std_srvs.srv import Trigger
 
 sys.path.insert(0, str(_SCRIPT_DIR))
+from action_audit import ActionAudit, audit_report
 from fabrics_ros_interface import create_publisher
 from policy_loader import RLGamesLstmActorPolicy
 from episode_recorder import EpisodeCsvRecorder
@@ -117,6 +118,7 @@ class GraspInferenceNode(Node):
         object_name: str | int | None = None,
         allow_hand_mismatch: bool = False,
         allow_idle_arm_mismatch: bool = False,
+        observe_only: bool = False,
         contact_threshold: float | None = None,
         episode_steps: int | None = None,
         log_dir: str = "~/rl_ws/sim2real/logs",
@@ -126,6 +128,9 @@ class GraspInferenceNode(Node):
         self.settle_time = settle_time
         self.allow_hand_mismatch = allow_hand_mismatch
         self.allow_idle_arm_mismatch = allow_idle_arm_mismatch
+        # ★관측 전용(가이드 Stage 5): 관측→정책→디코드까지 다 돌리되 **명령을 보내지 않는다**.
+        #   액션 분포·NaN·포화·급변만 본다 → "관측→정책" 과 "정책→제어" 를 분리 확정한다.
+        self.observe_only = bool(observe_only)
         self.recorder = EpisodeCsvRecorder(log_dir)
         self._traj: list[tuple[np.ndarray, np.ndarray]] = []   # (arm_cmd, hand_cmd) — 역재생용
         self._replay_idx = 0
@@ -135,6 +140,7 @@ class GraspInferenceNode(Node):
         # 자산·토픽·관절·계약을 여기서 해석한다. 매니페스트 대조 검증이 함께 돈다 —
         # 배포가 sim 과 다른 로봇 자산을 쓰던 사고(palm 6.5cm 어긋남)의 방어선.
         self.profile = load_robot_profile(robot)
+        self.audit = ActionAudit(self.profile.contract.action_dim)
         self.get_logger().info(
             f"구성 [{self.profile.name}] side={self.profile.acting_side} "
             f"ee={self.profile.ee_type}/{self.profile.ee_dof} "
@@ -247,6 +253,11 @@ class GraspInferenceNode(Node):
         self.create_timer(1.0 / APPROACH_CMD_HZ, self._approach_loop)
         self.create_timer(1.0 / CONTROL_HZ, self._policy_loop)
 
+        if self.observe_only:
+            self.get_logger().warn(
+                "★관측 전용 모드 — 로봇에 어떤 명령도 보내지 않는다(무동작). "
+                "실기 관측으로 정책만 돌려 액션 분포·NaN·포화·급변을 종료 시 보고한다."
+            )
         self.get_logger().info("준비 완료. '/grasp/start' 서비스 호출 시 에피소드 시작.")
 
     # ------------------------------------------------------------------
@@ -456,9 +467,10 @@ class GraspInferenceNode(Node):
             return
         # 컵과 무관한 **고정 홈** 으로 이동한다. 컵 위치는 perception 결과라 참값
         # pregrasp 로 텔레포트할 수 없고, 홈→컵 접근은 정책이 학습한 몫이다.
-        self.cmd_pub.send_side_full(
-            self.profile.acting_side, self.core.q_home_arm.tolist(), self.hand_approach.tolist()
-        )
+        if not self.observe_only:
+            self.cmd_pub.send_side_full(
+                self.profile.acting_side, self.core.q_home_arm.tolist(), self.hand_approach.tolist()
+            )
         if time.monotonic() - self._approach_start_time >= self.settle_time:
             # ★죽은 손 판별 게이트: settle 동안 APPROACH 를 명령했는데도 손 피드백이
             #   안 따라오면(예: 물리 -1.57 인데 0.000 보고 = Modbus 피드백 동결) RUNNING 금지.
@@ -545,10 +557,12 @@ class GraspInferenceNode(Node):
             )
 
         # 명령 전송 (+역재생용 궤적 기록)
-        self.cmd_pub.send_side_full(
-            self.profile.acting_side, out.arm_cmd.tolist(), out.hand_cmd.tolist()
-        )
-        self._traj.append((out.arm_cmd.copy(), out.hand_cmd.copy()))
+        self.audit.add(out.action)
+        if not self.observe_only:
+            self.cmd_pub.send_side_full(
+                self.profile.acting_side, out.arm_cmd.tolist(), out.hand_cmd.tolist()
+            )
+            self._traj.append((out.arm_cmd.copy(), out.hand_cmd.copy()))
 
         # CSV per-step 기록 (action·관절·모터·센서·obj)
         self.recorder.record(
@@ -589,9 +603,10 @@ class GraspInferenceNode(Node):
             self.get_logger().info("PLACING 완료 — 컵 반환·pregrasp 복귀 → IDLE (재트리거 대기)")
             return
         arm_cmd, hand_cmd = self._traj[self._replay_idx]
-        self.cmd_pub.send_side_full(
-            self.profile.acting_side, arm_cmd.tolist(), hand_cmd.tolist()
-        )
+        if not self.observe_only:
+            self.cmd_pub.send_side_full(
+                self.profile.acting_side, arm_cmd.tolist(), hand_cmd.tolist()
+            )
         self._replay_idx -= 1
 
 
@@ -615,6 +630,9 @@ def main() -> None:
                         help="settle 후 손 피드백 추종 게이트 우회")
     parser.add_argument("--allow-idle-arm-mismatch", action="store_true", default=False,
                         help="유휴(반대편) 팔 rest 자세 확인 게이트 우회")
+    parser.add_argument("--observe-only", action="store_true", default=False,
+                        help="가이드 Stage 5 — 관측으로 정책만 돌리고 **명령을 보내지 않는다**. "
+                             "액션 분포·NaN·포화·급변을 종료 시 보고한다(로봇 무동작)")
     args = parser.parse_args()
 
     obj: str | int
@@ -633,6 +651,7 @@ def main() -> None:
         object_name=obj,
         allow_hand_mismatch=args.allow_hand_mismatch,
         allow_idle_arm_mismatch=args.allow_idle_arm_mismatch,
+        observe_only=args.observe_only,
         contact_threshold=args.contact_threshold,
         episode_steps=args.episode_steps,
         log_dir=args.log_dir,
@@ -642,6 +661,10 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        # 가이드 Stage 5 판정 결과. observe-only 가 아니어도 유용하다(라이브 중 포화·급변).
+        node.get_logger().info(
+            ("[관측 전용] " if node.observe_only else "[액션 감사] ") + audit_report(node.audit)
+        )
         node.cmd_pub.close()
         node.destroy_node()
         rclpy.shutdown()

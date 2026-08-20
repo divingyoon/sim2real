@@ -321,3 +321,125 @@ def test_finger_integrator_matches_sim_reference(name):
         )
         assert np.allclose(ctrl.close_buf, buf, atol=1e-12), f"close_buf step {step}"
         assert np.allclose(mine, theirs, atol=1e-12), f"hand_target step {step}"
+
+
+# ===========================================================================
+# Fabrics 계층 parity — 모션 계층이 갈리면 그 위(obs·action)는 전부 무의미하다.
+#
+# 최종 아키텍처가 RL → palm 목표 → **Fabrics** → 관절이므로, sim 과 실기가 같은
+# Fabrics 를 **같은 인자로** 만들어야 한다(가이드 §31). 자산 신원이 어긋나 palm 이
+# 6.5cm 밀렸던 사고(08.18)가 정확히 이 층에서 났다.
+# ===========================================================================
+
+def _call_kwargs(src: str, func_name: str) -> list[dict]:
+    """소스에서 `func_name(...)` 호출들의 **리터럴 키워드 인자**를 뽑는다."""
+    tree = ast.parse(src)
+    out: list[dict] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        f = node.func
+        name = f.id if isinstance(f, ast.Name) else getattr(f, "attr", None)
+        if name != func_name:
+            continue
+        kw = {}
+        for k in node.keywords:
+            if k.arg is None:
+                continue
+            try:
+                kw[k.arg] = ast.literal_eval(k.value)
+            except (ValueError, SyntaxError):
+                kw[k.arg] = "<non-literal>"
+        out.append(kw)
+    return out
+
+
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_fabric_class_matches_sim(name):
+    """프로필이 선언한 fabric 클래스로 sim 이 실제로 만드는가."""
+    prof = load_robot_profile(name)
+    src = _env_path_for(prof).read_text()
+    calls = _call_kwargs(src, prof.fabrics.class_name)
+    assert calls, f"{name}: sim 이 {prof.fabrics.class_name} 를 생성하지 않는다"
+
+
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_fabric_robot_asset_matches_sim(name):
+    """★자산 신원 — `robot_dir_name`/`robot_name` 이 프로필과 같아야 한다.
+
+    배포가 이 인자를 생략해 기본값을 쓰던 시절 palm 이 6.5cm 어긋났다. sim 이 자산을
+    바꾸면 여기서 먼저 죽는다.
+    """
+    prof = load_robot_profile(name)
+    src = _env_path_for(prof).read_text()
+    calls = _call_kwargs(src, prof.fabrics.class_name)
+    for kw in calls:
+        assert kw.get("robot_dir_name") == prof.fabrics.robot_dir, (
+            f"{name}: sim robot_dir_name={kw.get('robot_dir_name')} != "
+            f"프로필 {prof.fabrics.robot_dir}"
+        )
+        assert kw.get("robot_name") == prof.fabrics.robot_name
+
+
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_fabric_world_matches_sim(name):
+    """충돌 월드가 다르면 같은 palm 목표에서 다른 관절해가 나온다."""
+    prof = load_robot_profile(name)
+    src = _env_path_for(prof).read_text()
+    worlds = {kw.get("world_filename") for kw in _call_kwargs(src, "WorldMeshesModel")}
+    assert worlds, f"{name}: sim 이 WorldMeshesModel 을 만들지 않는다"
+    assert worlds == {prof.fabrics.world}, (
+        f"{name}: sim world={worlds} != 프로필 {prof.fabrics.world}"
+    )
+
+
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_fabric_flags_match_deployment(name):
+    """`graph_capturable`/`use_hand_fabric` 은 배포와 같아야 한다.
+
+    use_hand_fabric=True 로 바뀌면 손이 fabric 제어로 넘어가 action 의미가 통째로 달라진다.
+    """
+    prof = load_robot_profile(name)
+    src = _env_path_for(prof).read_text()
+    for kw in _call_kwargs(src, prof.fabrics.class_name):
+        assert kw.get("graph_capturable") is False
+        assert kw.get("use_hand_fabric") is False
+
+
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_reset_fabric_damping_matches_constant(name):
+    """리셋 fabric 감쇠는 cfg 가 아니라 env 코드에 박힌 리터럴이라 놓치기 쉽다."""
+    from robot_profile import RESET_FABRICS_DAMPING_GAIN
+
+    prof = load_robot_profile(name)
+    src = _env_path_for(prof).read_text()
+    m = re.search(r"_reset_damping\s*=\s*([0-9.]+)\s*\*\s*torch\.ones", src)
+    assert m, f"{name}: sim 에서 _reset_damping 리터럴을 찾지 못했다"
+    assert float(m.group(1)) == pytest.approx(RESET_FABRICS_DAMPING_GAIN)
+
+
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_main_fabric_cspace_hand_is_grasp_pose(name):
+    """메인 fabric 의 null-space 손 자세 = GRASP_POSE (FULL_GRIP 아님).
+
+    다르면 같은 palm 목표에서 다른 팔 해가 나온다(여유자유도 해소가 달라짐).
+    """
+    prof = load_robot_profile(name)
+    src = _env_path_for(prof).read_text()
+    assert re.search(
+        r"cspace_default\[:,\s*NUM_ARM_DOF:\]\s*=\s*self\.hand_grasp_pose", src
+    ), f"{name}: sim 메인 fabric cspace 손이 hand_grasp_pose 가 아니다"
+
+
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_fabric_arm_attractor_is_home_at_reset(name):
+    """리셋 시 팔 null-space attractor = pregrasp 팔 자세.
+
+    고정 홈 구성에서는 pregrasp 팔 = q_home 이므로 배포의 `default_config[:7] = q_home`
+    과 일치한다. sim 이 이걸 바꾸면(예: ARM_START 로 되돌림) 시작 흔들림이 달라진다.
+    """
+    prof = load_robot_profile(name)
+    src = _env_path_for(prof).read_text()
+    assert re.search(
+        r"default_config\[env_ids,\s*:NUM_ARM_DOF\]\s*=\s*q_pregrasp\[:,\s*:NUM_ARM_DOF\]", src
+    ), f"{name}: sim 리셋에서 팔 attractor 설정을 찾지 못했다"

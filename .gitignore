@@ -9,3 +9,6 @@ __pycache__/
 
 # Local upstream checkout; keep it on disk but never add it to this repo.
 vendor/openarm/openarm_teleop/
+
+# 배포 파이썬 환경(setup_deploy_env.sh 로 재생성)
+.venv/

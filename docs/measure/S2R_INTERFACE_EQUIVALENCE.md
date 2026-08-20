@@ -224,3 +224,41 @@ sim 주석이 배포 요구사항을 명시하고 있다 — *"실기 미러: gr
   sim 계약 *"action=0 이면 Fabrics 가 홈에서 정렬된 pregrasp 까지 스스로 접근한다"* 와 일치.
 - home 구성: action=0 에서 **홈에 머문다** ✅ (잔차 18.8 mm = Fabrics null-space 정상상태)
 - 두 거동이 **구성에서 자동으로 갈린다** — 배포 코드에 분기 리터럴이 없다.
+
+---
+
+## 10. ★블로커 — 배포 파이썬 환경이 아예 없었다 (2026-08-20 발견 · 해소)
+
+`grasp_inference.py` 를 실행할 수 있는 인터프리터가 이 머신에 **하나도 없었다.**
+
+| 인터프리터 | rclpy | torch | warp | rl_games | fabrics_sim | GPU |
+|---|---|---|---|---|---|---|
+| ROS Humble `python3.10` | ✅ | 2.2.1+**cu121** | ❌ | ❌ | ❌ | ❌ **sm_90 까지** |
+| Isaac 번들 `python3.11` | ❌ | 2.7.0+cu128 | ✅ | ✅ | ❌(경로) | ✅ |
+
+- ROS 쪽 torch 는 `arch_list = [sm_50 … sm_90]` 인데 **RTX 5090 은 sm_120** →
+  `RuntimeError: CUDA error: no kernel image is available for execution on the device`.
+  즉 ROS 인터프리터로는 **정책도 Fabrics 도 GPU 에서 못 돌린다**.
+- Isaac 쪽은 GPU 는 되지만 `rclpy` 가 없다(ROS Humble 의 rclpy 는 py3.10 빌드).
+- 저장소에 `file_command_transport.py`("rclpy 를 import 할 수 없는 환경용")가 있는 걸 보면
+  과거에 이 벽을 만나 우회를 시도한 흔적이 있다. 다만 그건 **명령 방향 단방향**이라
+  60 Hz 센서 수신(관절·컵·tip)은 못 덮는다.
+
+**해소**: `scripts/setup_deploy_env.sh` — ROS 의 python3.10 위에
+`--system-site-packages` venv 를 만들어 rclpy 를 상속하고, torch(cu128)·warp·rl_games·
+fabrics_sim 만 venv 안에서 덮어쓴다. 시스템은 건드리지 않는다.
+
+| 항목 | 값 | 비고 |
+|---|---|---|
+| python | 3.10.12 | ROS Humble 과 동일 |
+| torch | **2.7.1+cu128** | `sm_120` 포함, 5090에서 CUDA op 검증 |
+| warp-lang | 1.8.1 | fabrics_sim 요구 `<1.8.2`, Isaac 과 동일 |
+| rl-games | 1.6.1 | Isaac 학습 환경과 동일(체크포인트 정합) |
+| numpy / scipy | 1.26.4 / 1.13.1 | fabrics_sim 요구 `numpy<2.0` — torch·rl_games 가 2.x 를 끌어오므로 **명시 핀 필수** |
+| urdfpy | 0.0.22 + 패치 | 끌려오는 networkx 2.2 가 py3.10 에서 죽음 → `urdfpy_patch.sh` (venv 안에서만) |
+
+**검증**: 이 환경에서 zero-action Fabrics 궤적이 Isaac python 결과와 **완전히 동일**하다
+(§9 표와 같은 값). 테스트 스위트 417 passed / 23 skipped.
+`grasp_inference.py --help` 도 import 를 전부 해결한다.
+
+실행 전 **반드시** `source /opt/ros/humble/setup.bash` (rclpy 상속 전제).
