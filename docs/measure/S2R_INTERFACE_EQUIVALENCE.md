@@ -262,3 +262,47 @@ fabrics_sim 만 venv 안에서 덮어쓴다. 시스템은 건드리지 않는다
 `grasp_inference.py --help` 도 import 를 전부 해결한다.
 
 실행 전 **반드시** `source /opt/ros/humble/setup.bash` (rclpy 상속 전제).
+
+---
+
+## 11. 관측 계약 자동 추출 (2026-08-20) — "여러 환경 세팅"에 대한 답
+
+hdgp 에는 관측을 정의하는 태스크가 **22개** 있다(grasp_v1/v2/v7_2/v10_3/v11/adapt/sensor ·
+pour_v1/v3/v4/v5/sensor · rh56f1 · gripper · agnostic ×2). 어느 것을 배포 대상으로 삼든
+obs 계약을 손으로 옮겨 적는 순간 드리프트가 시작된다 → **소스에서 자동 추출**한다.
+
+`scripts/obs_contract.py` + `scripts/obs_contract_report.py`
+
+```bash
+python3 obs_contract_report.py                                # 전 태스크 요약
+python3 obs_contract_report.py --task tesollo/right/grasp_sensor   # 상세(정의식·상수·노이즈)
+python3 obs_contract_report.py --diff tesollo_sensor__right        # 배포 빌더와 대조
+```
+
+**결과: 22/22 태스크 추출 성공.** 형태가 3가지라 전부 다뤄야 했다 —
+`torch.cat([...])` 리터럴 · `parts = [...]; cat(parts)` 우회(4개 태스크) ·
+`obs = cat(...)` 뒤 `obs = nan_to_num(obs)` 재대입(4개 태스크).
+
+### 자동으로 나오는 것 / 안 나오는 것 (정직하게)
+
+| | 자동 | 근거 |
+|---|---|---|
+| 세그먼트 **순서·이름** | ✅ | 재배열·개명·추가를 즉시 잡는다 |
+| 각 세그먼트 **정의식** | ✅ | 프레임 힌트(`_local`)·차분(`a − b`)이 보인다 |
+| **정규화 상수**(ALL_CAPS) | ✅ | `CONTACT_FORCE_MAX`, `JOINT_POS_ERR_MAX` 등 |
+| **DR 노이즈** 적용 여부 | ✅ | `randn_like` 등 검출 |
+| 세그먼트 **차원** | ❌ | 대부분 상위 스코프·`self.*` 라 정적으로 못 센다 |
+| **프레임·단위의 의미** | ❌ | world vs local, rad vs deg 는 사람 판단 |
+
+차원과 의미는 **런타임 덤프 대조(P3 본편)로만** 확정된다. 이 도구는 그 앞단의 뼈대를 준다.
+
+### 부수 발견 — sim 은 obs 에 DR 노이즈를 더한다
+`grasp_sensor` 는 `arm_joint_pos`·`arm_joint_vel`·`finger_joint_pos`·`finger_joint_vel`·
+`palm_center_pos` 5개 세그먼트에 `randn_like` 노이즈를 더한다(`pour_*` 는 4개).
+**배포는 노이즈를 더하지 않는다** — 실센서가 곧 노이즈다. 이건 올바른 비대칭이고,
+`--diff` 가 매번 그 목록을 찍어 잊지 않게 한다.
+
+### 기존 파리티 테스트를 이 추출기로 교체
+구 정규식 추출기는 단순 식별자가 아닌 항을 **조용히 버렸고**, `parts` 우회·`nan_to_num`
+재대입 태스크에서는 아예 찾지 못해 `pytest.skip` 으로 넘어갔다(= 검사 안 됨).
+AST 추출기로 바꾼 뒤 세그먼트 순서를 일부러 뒤바꿔 3개 프로필 전부 RED 되는 것을 확인했다.

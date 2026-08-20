@@ -109,17 +109,15 @@ def test_profile_contract_matches_constants(name):
 # --------------------------------------------------------------------------
 
 def _sim_actor_segments(name: str) -> list[str]:
-    """`actor_obs = torch.cat([...])` 의 식별자 시퀀스를 소스에서 뽑는다."""
-    src = _env_path_for(load_robot_profile(name)).read_text()
-    m = re.search(r"actor_obs\s*=\s*torch\.cat\(\s*\[(.*?)\]\s*,", src, re.S)
-    if not m:
-        pytest.skip(f"{name}: actor_obs torch.cat 블록을 찾지 못함")
-    names = []
-    for line in m.group(1).splitlines():
-        line = line.split("#")[0].strip().rstrip(",").strip()
-        if line and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", line):
-            names.append(line)
-    return names
+    """sim `_get_observations` 의 obs concat 세그먼트 이름 시퀀스.
+
+    ★AST 추출기(`obs_contract`)를 쓴다. 구 정규식은 단순 식별자가 아닌 항을 **조용히
+    버려서** 세그먼트 수가 어긋났고, `actor_obs_parts` 우회나 `nan_to_num` 재대입을
+    쓰는 태스크(hdgp 4개)에서는 아예 찾지 못했다.
+    """
+    from obs_contract import extract_obs_contract
+
+    return extract_obs_contract(_env_path_for(load_robot_profile(name))).names
 
 
 @pytest.mark.parametrize("name", ALL_PROFILES)
