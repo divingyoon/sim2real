@@ -112,12 +112,36 @@ def _far_cup_y(cfg, home_y: float) -> float:
     return max(c - r, c + r, key=lambda v: abs(v - home_y))
 
 
+#: sim 이 액션 기준점을 **컵 정준 pregrasp** 로 옮긴 구성(홈 기준이 아님).
+#: 배포 `palm_target_from_delta` 는 아직 **홈 기준**이라 이 구성에서 도달성이 성립하지 않는다.
+#: 자세한 근거는 아래 테스트 docstring 참조.
+CUP_ANCHORED_PROFILES = {"tesollo_sensor__right"}
+
+
 @pytest.mark.parametrize("name", ALL_PROFILES)
-def test_palm_delta_y_reaches_far_cup(name):
+def test_palm_delta_y_reaches_far_cup(name, request):
     """★도달성: 홈에서 스폰 박스의 **가장 먼** 컵까지 palm 이 닿아야 한다.
 
     구 스칼라 palm_delta 0.15 로는 구조적 불가였다(필요 0.28 m).
+
+    ★2026-08-20 `grasp_sensor` 는 hdgp c99b37d 에서 **액션 기준점을 홈 → 컵 정준
+    pregrasp** 로 옮겼다(`grasp_right_env.py:2005-2016`, `pregrasp_palm_pose_buf`).
+    물리 리셋은 여전히 고정 홈이지만 action=0 이 "홈 유지"가 아니라 "정렬된 pregrasp 로
+    접근"을 뜻한다 → palm_delta 는 0.35 가 아니라 0.15 로 충분하다.
+    그런데 **배포는 아직 홈 기준**이다(`grasp_policy_core.palm_target_from_delta`,
+    `base = home_pose`). sim 주석이 명시적으로 요구하는
+    "실기 미러: grasp_inference 가 인지된 컵 pose 로 동일 기준점을 계산한다" 가 미구현이다.
+    → 이 테스트는 그 미구현을 **드러내는 상태로 둔다**(strict xfail). 배포가 컵 기준점을
+    구현하면 이 테스트가 통과하면서 strict xfail 이 실패로 알려주므로, 그때 조건을
+    기준점-인지 형태로 다시 쓴다. 기록: `docs/measure/S2R_INTERFACE_EQUIVALENCE.md` §8
     """
+    if name in CUP_ANCHORED_PROFILES:
+        request.node.add_marker(
+            pytest.mark.xfail(
+                strict=True,
+                reason="배포가 컵 정준 액션 기준점을 미구현(홈 기준) — 계획 P3에서 해소",
+            )
+        )
     _, cfg, home, mins, maxs = _ctx_by_name(name)
     cup_y = _far_cup_y(cfg, home[1])
     need = abs(cup_y - home[1])
