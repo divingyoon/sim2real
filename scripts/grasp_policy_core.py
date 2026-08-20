@@ -60,17 +60,72 @@ def validate_home_in_workspace(home_pose, palm_mins, palm_maxs) -> None:
         )
 
 
-def palm_target_from_delta(home_pose, delta, palm_mins, palm_maxs) -> np.ndarray:
-    """홈 + Δ → workspace clamp 된 palm 목표 (sim `_pre_physics_step` 1:1).
+#: 컵 정준 pregrasp 의 palm 자세(도) — sim 리터럴 `math.radians(90/0/90)` 과 1:1.
+PREGRASP_PALM_ROT_DEG = (90.0, 0.0, 90.0)
 
-    clamp 범위를 홈으로 **완화**한다(min(palm_mins, home) / max(palm_maxs, home)):
-    기준점 자체는 언제나 도달 가능해야 action=0 이 홈 유지를 뜻한다.
+
+def palm_target_from_delta(anchor_pose, delta, palm_mins, palm_maxs) -> np.ndarray:
+    """**액션 기준점** + Δ → workspace clamp 된 palm 목표 (sim `_pre_physics_step` 1:1).
+
+    clamp 범위를 기준점으로 **완화**한다(min(palm_mins, anchor) / max(palm_maxs, anchor)):
+    기준점 자체는 언제나 도달 가능해야 action=0 이 "기준점 유지"를 뜻한다.
+
+    ★기준점은 구성마다 다르다 — `grasp_v1` 은 홈, `grasp_sensor` 는 컵 정준 pregrasp.
+    `action_anchor_pose()` 로 고른다. 홈을 넣으면 컵 기준 구성에서 팔이 홈 근처에서만
+    움직인다(2026-08-20 발견).
     """
-    base = np.asarray(home_pose, dtype=np.float64).reshape(-1)
+    base = np.asarray(anchor_pose, dtype=np.float64).reshape(-1)
     d = np.asarray(delta, dtype=np.float64).reshape(-1)
     lo = np.minimum(np.asarray(palm_mins, dtype=np.float64).reshape(-1), base)
     hi = np.maximum(np.asarray(palm_maxs, dtype=np.float64).reshape(-1), base)
     return np.clip(base + d, lo, hi)
+
+
+def pregrasp_anchor_pose(cup_pos, cfg, palm_mins, palm_maxs) -> np.ndarray:
+    """컵 pose → 컵 정준 pregrasp palm 6D (sim `_reset_idx` 1:1).
+
+        pregrasp = clamp(cup_pos + (offset_x, offset_y, offset_z), palm_mins, palm_maxs)
+        rot      = (90°, 0°, 90°)
+
+    sim 은 여기에 DR 노이즈(`pregrasp_noise_*`)를 더하지만 **배포는 더하지 않는다** —
+    그 노이즈는 기준점 오차에 정책을 강인하게 만들려는 학습 장치이지 배포 시 재현할
+    대상이 아니다.
+    """
+    cup = np.asarray(cup_pos, dtype=np.float64).reshape(-1)
+    if cup.shape[0] != 3:
+        raise ValueError(f"컵 위치는 3D 여야 한다: {cup.shape}")
+    offset = np.array(
+        [cfg["pregrasp_offset_x"], cfg["pregrasp_offset_y"], cfg["pregrasp_offset_z"]],
+        dtype=np.float64,
+    )
+    pose = np.empty(6, dtype=np.float64)
+    pose[:3] = cup + offset
+    pose[3:] = np.radians(PREGRASP_PALM_ROT_DEG)
+    lo = np.asarray(palm_mins, dtype=np.float64).reshape(-1)
+    hi = np.asarray(palm_maxs, dtype=np.float64).reshape(-1)
+    return np.clip(pose, lo, hi)
+
+
+def action_anchor_pose(anchor: str, home_pose, cup_pos, cfg, palm_mins, palm_maxs) -> np.ndarray:
+    """구성의 액션 기준점을 고른다. `anchor` 는 `robot_profile.load_action_anchor()` 산출."""
+    if anchor == "home":
+        return np.asarray(home_pose, dtype=np.float64).reshape(-1).copy()
+    if anchor == "cup":
+        return pregrasp_anchor_pose(cup_pos, cfg, palm_mins, palm_maxs)
+    raise ValueError(f"알 수 없는 anchor: {anchor!r} (home | cup)")
+
+
+def require_anchor_established(anchor: str, established: bool) -> None:
+    """컵 기준 구성에서 기준점이 아직 안 잡혔으면 **예외**.
+
+    조용히 홈으로 되돌아가면 팔이 홈 근처에서만 움직이고(증상 B) 로그에는 아무것도 안
+    남는다. 명령을 내는 지점에서 시끄럽게 실패시킨다.
+    """
+    if anchor == "cup" and not established:
+        raise RuntimeError(
+            "액션 기준점이 아직 확립되지 않았다 — anchor='cup' 구성은 "
+            "reset_episode(..., cup_pos=...) 로 컵 pose 를 한 번 잡아야 한다"
+        )
 
 
 def gate_tip_contact(
@@ -187,6 +242,17 @@ class GraspPolicyCore:
         self.home_palm_pose = home_pose_to_radians(cfg["reset_home_palm_pose"])
         validate_home_in_workspace(self.home_palm_pose, self.palm_mins, self.palm_maxs)
 
+        # 액션 델타의 기준점. **sim 소스에서 유도**한다 — 프로필에 적어두면 sim 이 바뀔 때
+        # 조용히 어긋난다(2026-08-20: grasp_sensor 가 홈→컵으로 옮겼는데 배포는 홈이었다).
+        from robot_profile import load_action_anchor
+
+        self.action_anchor = load_action_anchor(profile)
+        # reset_episode 전까지는 홈. cup anchor 구성은 reset 에서 컵 pose 로 덮어쓴다.
+        self.anchor_palm_pose = self.home_palm_pose.copy()
+        #: cup anchor 에서 "컵 pose 로 기준점을 잡았는가". 생성자의 초기 리셋은 fabric
+        #: 버퍼 초기화가 목적이라 이 플래그를 세우지 않는다 — 명령 시점에서 막는다.
+        self._anchor_established = False
+
         from grasp_action_decoder import GraspFingerController, LiftLatch
         from grasp_obs_builder import make_object_onehot, REAL_CUP_INDEX
         from robot_profile import ee_limit_arrays
@@ -210,7 +276,8 @@ class GraspPolicyCore:
 
         self._setup_fabrics()
         self.q_home_arm = self.build_home()
-        self.reset_episode(self.q_home_arm, self.hand_approach)
+        # 초기화용 리셋 — 기준점은 아직 확립하지 않는다(cup anchor 는 컵 pose 가 필요).
+        self.reset_episode(self.q_home_arm, self.hand_approach, _establish_anchor=False)
 
     # -- Fabrics -----------------------------------------------------------
     def _setup_fabrics(self) -> None:
@@ -312,14 +379,33 @@ class GraspPolicyCore:
             )
 
     # -- 에피소드 -----------------------------------------------------------
-    def reset_episode(self, arm_pos, hand_pos) -> None:
+    def reset_episode(self, arm_pos, hand_pos, cup_pos=None, *, _establish_anchor=True) -> None:
         """에피소드 시작 상태로 되돌린다.
 
         hand_cmd_prev 초기값은 **APPROACH**다 — zeros 금지. sim 리셋이
         `hand_joint_targets = approach_hand` 로 두는 값과 같아야 첫 tick 의
         joint_pos_err 이 sim 과 정합한다.
+
+        ★`cup_pos` 는 anchor="cup" 구성에서 **필수**다. sim 은 리셋 시점의 컵 위치로
+        기준점을 한 번 정하고 에피소드 내내 고정하므로(`pregrasp_palm_pose_buf`),
+        배포도 여기서 한 번 잡고 이후 갱신하지 않는다 — 매 tick 컵을 추종하면 컵이
+        밀릴 때 기준점이 따라가 학습과 달라진다.
+        cup_pos 없이 cup anchor 를 리셋하면 **예외**다. 홈으로 조용히 되돌아가면
+        팔이 홈 근처에서만 움직이는 바로 그 증상이 된다.
         """
         torch = self._torch
+        if _establish_anchor:
+            if self.action_anchor == "cup" and cup_pos is None:
+                raise ValueError(
+                    "anchor='cup' 구성은 리셋에 컵 pose 가 필요하다 "
+                    "(홈으로 대체하면 팔이 홈 근처에서만 움직인다)"
+                )
+            self.anchor_palm_pose = action_anchor_pose(
+                self.action_anchor, self.home_palm_pose,
+                cup_pos if cup_pos is not None else np.zeros(3),
+                self.cfg, self.palm_mins, self.palm_maxs,
+            )
+            self._anchor_established = True
         q0 = np.concatenate([
             np.asarray(arm_pos, dtype=np.float64).reshape(-1)[:NUM_ARM_DOF],
             np.asarray(hand_pos, dtype=np.float64).reshape(-1)[:NUM_HAND_DOF],
@@ -410,9 +496,10 @@ class GraspPolicyCore:
         """Δpalm → Fabrics IK. fabric_q 는 영속 상태로 적분(실측 재동기화 금지)."""
         from grasp_action_decoder import scale_palm_delta
 
+        require_anchor_established(self.action_anchor, self._anchor_established)
         delta = scale_palm_delta(palm_action, self.delta_mins, self.delta_maxs)
         palm_pose = palm_target_from_delta(
-            self.home_palm_pose, delta, self.palm_mins, self.palm_maxs
+            self.anchor_palm_pose, delta, self.palm_mins, self.palm_maxs
         )
         # sim parity: fabric_q 의 손 부분은 손 명령으로 동기화(FK·null-space 용)
         self.fabric_q[0, NUM_ARM_DOF:] = self._t(hand_cmd)

@@ -357,6 +357,9 @@ CFG_KEYS_REQUIRED = (
     "finger_close_speed", "couple_four_fingers", "retighten_after_latch",
     "lift_wait_joint7_delta", "warm_j7_min", "warm_j7_max",
     "lift_start_min_grip_fingers", "grasp_ready_hold_steps",
+    # 컵 정준 액션 기준점(anchor="cup")의 유일한 출처. home anchor 구성에서도
+    # 존재하므로 필수로 둔다 — 없으면 조용히 0 을 쓰는 대신 예외가 난다.
+    "pregrasp_offset_x", "pregrasp_offset_y", "pregrasp_offset_z",
 )
 
 
@@ -374,6 +377,57 @@ def load_profile_env_cfg(profile: RobotProfile) -> dict[str, object]:
     picked.update({k: cfg[k] for k in CFG_KEYS_OPTIONAL if k in cfg})
     picked["reset_fabrics_damping_gain"] = RESET_FABRICS_DAMPING_GAIN
     return picked
+
+
+def load_action_anchor(profile: RobotProfile) -> str:
+    """액션 델타의 **기준점**을 sim env 소스에서 유도한다 → "home" | "cup".
+
+    왜 유도하는가: 프로필에 손으로 적어두면 sim 이 바뀔 때 조용히 어긋난다. 실제로
+    `grasp_sensor` 는 hdgp c99b37d(2026-08-19)에서 기준점을 홈 → 컵 정준 pregrasp 로
+    옮겼고, 배포는 그대로 홈이라 팔이 홈 근처에서만 움직이는 상태였다.
+
+    판별 지점: 고정 홈 분기(`if self.q_home_arm is not None:`) 안에서
+    `pregrasp_palm_pose` 를 `self.home_palm_pose` 로 **덮어쓰면 home**, 그대로 두면
+    (컵 + pregrasp_offset 이 살아남으므로) **cup**.
+
+    분기 자체를 못 찾으면 추측하지 않고 예외를 던진다.
+    """
+    side = profile.acting_side
+    path = hdgp_task_dir(profile) / f"grasp_{side}_env.py"
+    if not path.exists():
+        raise FileNotFoundError(f"env 소스 없음: {path}")
+    tree = ast.parse(path.read_text())
+
+    def _is_home_branch(test) -> bool:
+        # self.q_home_arm is not None
+        return (
+            isinstance(test, ast.Compare)
+            and isinstance(test.left, ast.Attribute)
+            and test.left.attr == "q_home_arm"
+            and any(isinstance(op, ast.IsNot) for op in test.ops)
+        )
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If) or not _is_home_branch(node.test):
+            continue
+        for sub in ast.walk(ast.Module(body=node.body, type_ignores=[])):
+            if not isinstance(sub, ast.Assign):
+                continue
+            if not any(
+                isinstance(t, ast.Name) and t.id == "pregrasp_palm_pose" for t in sub.targets
+            ):
+                continue
+            if any(
+                isinstance(n, ast.Attribute) and n.attr == "home_palm_pose"
+                for n in ast.walk(sub.value)
+            ):
+                return "home"
+        return "cup"
+
+    raise ValueError(
+        f"{path}: 고정 홈 분기(`self.q_home_arm is not None`)를 찾지 못해 액션 기준점을 "
+        "판별할 수 없다 — sim 구조가 바뀌었으면 이 판별식을 갱신하라"
+    )
 
 
 def load_arm_mirror_sign(profile: RobotProfile) -> list[float]:

@@ -20,14 +20,18 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 from grasp_policy_core import (  # noqa: E402
+    action_anchor_pose,
+    require_anchor_established,
     gate_tip_contact,
     home_pose_to_radians,
     palm_target_from_delta,
+    pregrasp_anchor_pose,
     validate_home_in_workspace,
 )
 from robot_profile import (  # noqa: E402
     HDGP_OPENARM_SRC,
     available_profiles,
+    load_action_anchor,
     load_hdgp_module,
     load_profile_env_cfg,
     load_robot_profile,
@@ -112,52 +116,105 @@ def _far_cup_y(cfg, home_y: float) -> float:
     return max(c - r, c + r, key=lambda v: abs(v - home_y))
 
 
-#: sim 이 액션 기준점을 **컵 정준 pregrasp** 로 옮긴 구성(홈 기준이 아님).
-#: 배포 `palm_target_from_delta` 는 아직 **홈 기준**이라 이 구성에서 도달성이 성립하지 않는다.
-#: 자세한 근거는 아래 테스트 docstring 참조.
-CUP_ANCHORED_PROFILES = {"tesollo_sensor__right"}
+# --------------------------------------------------------------------------
+# 액션 기준점 (anchor) — sim 소스에서 유도한다. 손으로 선언하면 드리프트한다.
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_action_anchor_is_derived_from_sim_source(name):
+    """anchor 는 hdgp env 소스에서 읽는다 — 프로필에 적어두면 sim 변경과 어긋난다."""
+    prof = load_robot_profile(name)
+    assert load_action_anchor(prof) in ("home", "cup")
+
+
+def test_grasp_v1_anchors_at_home_and_grasp_sensor_at_cup():
+    """08.19 hdgp c99b37d 이후 두 트랙의 기준점이 갈렸다 — 그 사실을 고정한다."""
+    assert load_action_anchor(load_robot_profile("tesollo_bi_s__right")) == "home"
+    assert load_action_anchor(load_robot_profile("tesollo_bi_s__left")) == "home"
+    assert load_action_anchor(load_robot_profile("tesollo_sensor__right")) == "cup"
+
+
+def test_pregrasp_anchor_is_cup_plus_offset_clamped():
+    cfg = {"pregrasp_offset_x": -0.06, "pregrasp_offset_y": -0.07, "pregrasp_offset_z": 0.0}
+    mins = np.array([0.0, -1.0, 0.0, -9, -9, -9], dtype=float)
+    maxs = np.array([1.0, 1.0, 1.0, 9, 9, 9], dtype=float)
+    out = pregrasp_anchor_pose(np.array([0.30, -0.20, 0.30]), cfg, mins, maxs)
+    assert out[:3] == pytest.approx([0.24, -0.27, 0.30])
+    # 자세는 sim 리터럴 90/0/90 도 = π/2, 0, π/2
+    assert out[3:] == pytest.approx([math.pi / 2, 0.0, math.pi / 2])
+
+
+def test_pregrasp_anchor_respects_workspace_clamp():
+    cfg = {"pregrasp_offset_x": 0.0, "pregrasp_offset_y": 0.0, "pregrasp_offset_z": 0.0}
+    mins = np.array([0.30, -1.0, 0.0, -9, -9, -9], dtype=float)
+    maxs = np.array([1.0, 1.0, 1.0, 9, 9, 9], dtype=float)
+    out = pregrasp_anchor_pose(np.array([0.10, -0.20, 0.30]), cfg, mins, maxs)
+    assert out[0] == pytest.approx(0.30)
+
+
+def test_pregrasp_anchor_rejects_bad_cup_shape():
+    cfg = {"pregrasp_offset_x": 0.0, "pregrasp_offset_y": 0.0, "pregrasp_offset_z": 0.0}
+    mins = np.zeros(6); maxs = np.ones(6)
+    with pytest.raises(ValueError, match="컵"):
+        pregrasp_anchor_pose(np.array([0.1, 0.2]), cfg, mins, maxs)
 
 
 @pytest.mark.parametrize("name", ALL_PROFILES)
-def test_palm_delta_y_reaches_far_cup(name, request):
-    """★도달성: 홈에서 스폰 박스의 **가장 먼** 컵까지 palm 이 닿아야 한다.
+def test_action_anchor_pose_matches_declared_anchor(name):
+    """`action_anchor_pose` 가 anchor 종류에 따라 홈/컵 기준을 고른다."""
+    prof, cfg, home, mins, maxs = _ctx_by_name(name)
+    anchor = load_action_anchor(prof)
+    cup = np.array([0.30, -0.20 if prof.acting_side == "right" else 0.20, 0.30])
+    out = action_anchor_pose(anchor, home, cup, cfg, mins, maxs)
+    if anchor == "home":
+        assert out == pytest.approx(home)
+    else:
+        assert out == pytest.approx(pregrasp_anchor_pose(cup, cfg, mins, maxs))
 
-    구 스칼라 palm_delta 0.15 로는 구조적 불가였다(필요 0.28 m).
 
-    ★2026-08-20 `grasp_sensor` 는 hdgp c99b37d 에서 **액션 기준점을 홈 → 컵 정준
-    pregrasp** 로 옮겼다(`grasp_right_env.py:2005-2016`, `pregrasp_palm_pose_buf`).
-    물리 리셋은 여전히 고정 홈이지만 action=0 이 "홈 유지"가 아니라 "정렬된 pregrasp 로
-    접근"을 뜻한다 → palm_delta 는 0.35 가 아니라 0.15 로 충분하다.
-    그런데 **배포는 아직 홈 기준**이다(`grasp_policy_core.palm_target_from_delta`,
-    `base = home_pose`). sim 주석이 명시적으로 요구하는
-    "실기 미러: grasp_inference 가 인지된 컵 pose 로 동일 기준점을 계산한다" 가 미구현이다.
-    → 이 테스트는 그 미구현을 **드러내는 상태로 둔다**(strict xfail). 배포가 컵 기준점을
-    구현하면 이 테스트가 통과하면서 strict xfail 이 실패로 알려주므로, 그때 조건을
-    기준점-인지 형태로 다시 쓴다. 기록: `docs/measure/S2R_INTERFACE_EQUIVALENCE.md` §8
+def test_action_anchor_pose_rejects_unknown_anchor():
+    with pytest.raises(ValueError, match="anchor"):
+        action_anchor_pose("elbow", np.zeros(6), np.zeros(3), {}, np.zeros(6), np.ones(6))
+
+
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_palm_delta_reaches_far_cup_under_its_own_anchor(name):
+    """★도달성 — 기준점 종류에 맞는 조건으로 판정한다.
+
+    home 기준: 홈에서 스폰 박스의 **가장 먼** 컵까지 palm delta 로 닿아야 한다
+              (구 스칼라 0.15 로는 구조적 불가였다 — 필요 0.28 m).
+    cup 기준 : 기준점이 이미 컵을 따라오므로 필요한 건 **pregrasp offset 을 덮는 것**이다
+              (그래야 action 이 pregrasp 에서 컵까지 좁힐 수 있다).
+
+    ★값 하나만 대조하면 오판한다: `grasp_sensor` 의 palm_delta_y 가 0.35→0.15 로 줄어든 것은
+    회귀가 아니라 기준점이 홈→컵으로 옮겨간 결과다(hdgp c99b37d).
     """
-    if name in CUP_ANCHORED_PROFILES:
-        request.node.add_marker(
-            pytest.mark.xfail(
-                strict=True,
-                reason="배포가 컵 정준 액션 기준점을 미구현(홈 기준) — 계획 P3에서 해소",
-            )
-        )
-    _, cfg, home, mins, maxs = _ctx_by_name(name)
-    cup_y = _far_cup_y(cfg, home[1])
-    need = abs(cup_y - home[1])
-    dy = cfg["palm_delta_xyz"][1]
-    assert dy >= need, f"{name}: palm_delta_y={dy} < 필요 {need:.3f}"
+    prof, cfg, home, mins, maxs = _ctx_by_name(name)
+    anchor = load_action_anchor(prof)
+    dxyz = np.asarray(cfg["palm_delta_xyz"], dtype=float)
 
-    delta = np.zeros(6)
-    delta[1] = dy if cup_y > home[1] else -dy
-    reached = palm_target_from_delta(home, delta, mins, maxs)[1]
-    assert abs(reached - home[1]) >= need - 1e-9
+    if anchor == "home":
+        cup_y = _far_cup_y(cfg, home[1])
+        need = abs(cup_y - home[1])
+        assert dxyz[1] >= need, f"{name}: palm_delta_y={dxyz[1]} < 필요 {need:.3f}"
+        delta = np.zeros(6)
+        delta[1] = dxyz[1] if cup_y > home[1] else -dxyz[1]
+        reached = palm_target_from_delta(home, delta, mins, maxs)[1]
+        assert abs(reached - home[1]) >= need - 1e-9
+    else:
+        need = np.abs([cfg["pregrasp_offset_x"], cfg["pregrasp_offset_y"], cfg["pregrasp_offset_z"]])
+        assert np.all(dxyz >= need), f"{name}: palm_delta {dxyz} < pregrasp offset {need}"
 
 
 @pytest.mark.parametrize("name", ALL_PROFILES)
 def test_old_scalar_delta_cannot_reach(name):
-    """구 스칼라 0.15 로는 못 간다 — 회귀가 되살아나면 여기서 잡힌다."""
-    _, cfg, home, mins, maxs = _ctx_by_name(name)
+    """**홈 기준** 구성에서 구 스칼라 0.15 로는 못 간다 — 회귀가 되살아나면 여기서 잡힌다.
+
+    컵 기준 구성에는 해당하지 않는다(기준점이 컵을 따라오므로 0.15 로 충분하다).
+    """
+    prof, cfg, home, mins, maxs = _ctx_by_name(name)
+    if load_action_anchor(prof) != "home":
+        pytest.skip("컵 기준 구성 — 홈 기준 도달성 조건이 적용되지 않는다")
     cup_y = _far_cup_y(cfg, home[1])
     delta = np.zeros(6)
     delta[1] = 0.15 if cup_y > home[1] else -0.15
@@ -212,3 +269,20 @@ def test_force_obs_not_gated_when_disabled():
 def test_gate_validates_shape():
     with pytest.raises(ValueError):
         gate_tip_contact(np.zeros((5, 2)), 0.05, 0.10, 0.1)
+
+
+# --------------------------------------------------------------------------
+# 기준점 확립 게이트 — 컵 기준 구성은 리셋 전에 명령을 내면 안 된다
+# --------------------------------------------------------------------------
+
+def test_home_anchor_never_requires_establishment():
+    require_anchor_established("home", established=False)   # 예외 없음
+
+
+def test_cup_anchor_raises_before_reset():
+    with pytest.raises(RuntimeError, match="기준점"):
+        require_anchor_established("cup", established=False)
+
+
+def test_cup_anchor_ok_after_reset():
+    require_anchor_established("cup", established=True)

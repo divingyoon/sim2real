@@ -101,6 +101,10 @@ def run(args) -> None:
                   kp, kd, fc, inertia, substeps=args.pd_substeps)
     hand = (np.zeros(20) if args.hand_mode == "zero" else hand_approach.copy())
     cup = np.array([args.cup_x, args.cup_y, args.cup_z])
+    # 액션 기준점 확립 — 구성이 컵 기준이면 여기서 잡힌다(라이브의 settle 종료 대응).
+    core.reset_episode(core.q_home_arm, core.hand_approach, cup_pos=cup)
+    print(f"[loop_sim] anchor={core.action_anchor} "
+          f"기준점 palm={core.anchor_palm_pose[:3].round(4).tolist()}")
     delay = deque(maxlen=max(1, args.obs_delay + 1))
 
     rows, dists = [], []

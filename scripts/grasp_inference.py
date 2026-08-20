@@ -442,7 +442,11 @@ class GraspInferenceNode(Node):
         self.step_count = 0
         self._traj.clear()
         self._stall_since = None
-        self.core.reset_episode(self.core.q_home_arm, self.hand_pos)
+        # 기준점은 RUNNING 진입 직전(settle 종료)에 확립한다 — 그때 컵 pose 가 가장
+        # 최신이고, sim 이 리셋 시점 컵으로 한 번 정하는 것과 대응한다.
+        self.core.reset_episode(
+            self.core.q_home_arm, self.hand_pos, _establish_anchor=False
+        )
 
     # ------------------------------------------------------------------
     # APPROACHING (10Hz)
@@ -472,9 +476,15 @@ class GraspInferenceNode(Node):
             # RUNNING 진입 직전 코어 상태를 **실측**에서 다시 시작한다(첫 tick 점프 방지).
             # 이후로는 fabric_q 를 실측 재동기화하지 않는다 — 느린 실팔 위치로 명령이
             # 붕괴해 전진 불가(08.03 RUNNING 동결 근본원인).
-            self.core.reset_episode(self.arm_pos, self.hand_pos)
+            # ★액션 기준점 확립. anchor="cup" 구성(grasp_sensor)은 여기서 인지된 컵
+            #   pose 로 pregrasp 기준점을 잡고 **에피소드 내내 고정**한다(sim 과 동일).
+            #   컵을 매 tick 추종하면 컵이 밀릴 때 기준점이 따라가 학습과 달라진다.
+            self.core.reset_episode(self.arm_pos, self.hand_pos, cup_pos=self.cup_pos)
             self.state = State.RUNNING
-            self.get_logger().info("settle 완료 → RUNNING")
+            self.get_logger().info(
+                f"settle 완료 → RUNNING (anchor={self.core.action_anchor}, "
+                f"기준점 palm={self.core.anchor_palm_pose[:3].round(3).tolist()})"
+            )
 
     # ------------------------------------------------------------------
     # RUNNING (60Hz)
