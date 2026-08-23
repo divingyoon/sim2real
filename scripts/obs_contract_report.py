@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -27,12 +28,63 @@ from obs_contract import ObsContractError, diff_segments, extract_obs_contract  
 from robot_profile import HDGP_OPENARM_SRC  # noqa: E402
 
 
-def _task_envs(root: Path):
+DIRECT_RL = "direct"            # DirectRLEnv — `_get_observations` 의 torch.cat 을 판다
+MANAGER_BASED = "manager"       # ManagerBasedRLEnv — ObsTerm 선언. AST 추출 미지원
+
+
+@dataclass(frozen=True)
+class TaskSource:
+    path: Path
+    kind: str
+
+
+@dataclass(frozen=True)
+class SummaryCounts:
+    extracted: int
+    failed: int
+    manager_based: int
+
+
+def task_sources(root: Path):
+    """관측을 정의하는 파일 전부. **미지원도 목록에 남긴다.**
+
+    ★이전 구현은 `*_env.py` + `_get_observations` 만 훑었다. hdgp 에는 ObsTerm 으로
+      관측을 정의하는 manager-based 태스크가 12개 있는데 전부 조용히 사라져
+      "추출 성공 23 / 실패 0" 이라는 거짓 안심을 만들었다. 목록에서 빠지는 것과
+      "추출 미지원"으로 표시되는 것은 전혀 다르다.
+    """
+    out: list[TaskSource] = []
     for f in sorted(root.rglob("*_env.py")):
         if "/tests/" in str(f):
             continue
-        if "_get_observations" in f.read_text():
-            yield f
+        if "_get_observations" in f.read_text(encoding="utf-8"):
+            out.append(TaskSource(f, DIRECT_RL))
+    for f in sorted(root.rglob("*_env_cfg.py")):
+        if "/tests/" in str(f):
+            continue
+        if "ObsTerm(" in f.read_text(encoding="utf-8"):
+            out.append(TaskSource(f, MANAGER_BASED))
+    return out
+
+
+def _task_envs(root: Path):
+    for src in task_sources(root):
+        if src.kind == DIRECT_RL:
+            yield src.path
+
+
+def summarize(root: Path) -> SummaryCounts:
+    extracted = failed = manager = 0
+    for src in task_sources(root):
+        if src.kind == MANAGER_BASED:
+            manager += 1
+            continue
+        try:
+            extract_obs_contract(src.path)
+            extracted += 1
+        except ObsContractError:
+            failed += 1
+    return SummaryCounts(extracted=extracted, failed=failed, manager_based=manager)
 
 
 def _rel(f: Path, root: Path) -> str:
@@ -58,7 +110,13 @@ def cmd_summary(root: Path) -> int:
             f"{sum(not s.is_named for s in c.segments):7}  "
             + (", ".join(consts[:4]) + (" …" if len(consts) > 4 else ""))
         )
-    print(f"\n추출 성공 {ok} / 실패 {fail}")
+    managers = [s for s in task_sources(root) if s.kind == MANAGER_BASED]
+    if managers:
+        print("\nManagerBased (ObsTerm 선언 — AST 추출 미지원, 차원은 체크포인트에서만 확정):")
+        for src in managers:
+            print(f"  · {_rel(src.path, root)}/{src.path.name}")
+    print(f"\n추출 성공 {ok} / 실패 {fail} / 미지원 {len(managers)}")
+    # ★미지원은 실패가 아니다. 섞으면 종료코드가 늘 1 이 되어 신호가 죽는다.
     return 0 if fail == 0 else 1
 
 
