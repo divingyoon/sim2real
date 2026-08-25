@@ -30,6 +30,56 @@
 
 ---
 
+## 0-0. perception → sim 컵 소환 (실기 앞 단계)
+
+실기로 바로 가기 전에, **인지가 준 자리에 컵을 놓고 sim 에서 정책을 돌려** 확인하는
+단계다. 체인은 이미 있는 것을 그대로 쓴다:
+
+```
+[vision-3090]  RealSense → FP++ cup_tracking → cup_pose_relay → /cup_pose (base 6D, ~8 Hz)
+                          scripts/run_cup_pose_live.sh 가 다 띄운다
+      │
+      │  cup_pose_capture.py  (ROS 가 /cup_pose 를 보는 곳에서)
+      ▼
+   cup_pose.json   ← 인지 결과 한 장. 파지 한 에피소드 동안 컵은 정지해 있으므로
+      │              흘려보낼 필요가 없다.
+      ▼
+[Isaac]  probe_fab_shadow_record.py --cup_pose cup_pose.json
+         리셋 뒤 컵을 그 자리로 옮기고 정책 실행 → npz
+```
+
+**선행 조건**(vision-3090): RealSense 연결 + 목을 교정 자세 `pan −90 / tilt 280` 으로
+고정. 그 자세에서만 `global_camera_extrinsics.yaml` 이 유효하다(ChArUco 재투영 0.274 px).
+
+```bash
+# ① vision-3090 — 인지 체인
+bash ~/rl_ws/perception_plus_plus/scripts/run_cup_pose_live.sh
+ROS_DOMAIN_ID=126 ros2 topic echo /cup_pose      # ~8 Hz 확인
+
+# ② /cup_pose 가 보이는 머신에서 한 장 붙잡는다 (30 샘플 중앙값)
+python3 scripts/cup_pose_capture.py --out logs/shadow/cup_pose.json
+#    → 학습 분포 밖이면 축 이름과 범위를 찍고 **exit 1**
+
+# ③ Isaac (5090) — 그 자리에 컵을 놓고 정책 실행
+cd ~/rl_ws/hdgp
+../IsaacLab/isaaclab.sh -p scripts/probes/probe_fab_shadow_record.py \
+    --checkpoint log/.../fab_test16/nn/open-grip_l_grasp_sensor_fab.pth \
+    --fabrics_src /tmp/hdgp_bc86ca5/source/FABRICS/src \
+    --cup_pose ~/rl_ws/sim2real/logs/shadow/cup_pose.json \
+    --steps 1200 --num_envs 1 --out logs/shadow/sim_perception_cup.npz
+```
+
+★**분포 밖 경고를 무시하지 말 것.** 정책은 x 0.36~0.42 · y 0.17~0.21 · z 0.292 에서만
+학습됐다(preset 이 정의하고 도구가 거기서 읽는다). 그 밖의 컵으로 실패해도 그건 정책
+성능이 아니라 분포 문제다. 두 원인은 고치는 방법이 다르다.
+
+⚠ **DDS 가 머신을 건너가야 한다.** 라이브 경로는 vision-3090 ↔ 로봇 PC **유선**
+(192.168.100.x)으로 설계돼 있고 Isaac 이 도는 5090 은 그 경로에 없다. 08.25 에 WiFi
+(172.16.0.x)로 붙여 보았으나 유니캐스트 피어를 지정해도 discovery 가 안 붙었다
+(발행 221 건 수신 0, ping 은 정상). 그래서 **②를 `/cup_pose` 가 보이는 머신에서 돌리고
+json 만 옮기는** 형태로 짰다 — 파일 한 장이면 되고, DDS 를 건너게 만들면 ②를 5090 에서
+바로 돌릴 수 있다.
+
 ## 0-1. 기록을 다시 만들려면 (Isaac 필요)
 
 FABRICS 를 학습 시점으로 고정해야 한다. 저장소 사본을 쓰면 `openarm.tasks` 가 그것을

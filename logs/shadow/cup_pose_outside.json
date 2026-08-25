@@ -1,0 +1,16 @@
+{
+  "position": [
+    0.4325,
+    0.14250000000000002,
+    0.29209
+  ],
+  "orientation_wxyz": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "frame": "base_link",
+  "stamp": 1787643877.8615038,
+  "source": "/cup_pose (20 \uc0d8\ud50c \uc911\uc559\uac12)"
+}
