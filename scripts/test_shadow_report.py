@@ -16,7 +16,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from shadow_report import (  # noqa: E402
     lag_by_cross_correlation,
-    quat_angle_xyzw,
+    quat_angle,
     stats,
 )
 
@@ -69,21 +69,21 @@ def test_a_delay_beyond_the_search_window_is_not_invented():
 def test_identical_quaternions_are_zero_degrees_apart():
     q = np.array([[0.0, 0.0, 0.0, 1.0], [0.5, 0.5, 0.5, 0.5]])
 
-    assert quat_angle_xyzw(q, q) == pytest.approx(np.zeros(2), abs=1e-6)
+    assert quat_angle(q, q) == pytest.approx(np.zeros(2), abs=1e-6)
 
 
 def test_a_negated_quaternion_is_the_same_rotation():
     """q 와 −q 는 같은 자세다 — 부호 때문에 180° 를 보고하면 안 된다."""
     q = np.array([[0.0, 0.0, 0.3826834, 0.9238795]])
 
-    assert quat_angle_xyzw(q, -q) == pytest.approx(np.zeros(1), abs=1e-6)
+    assert quat_angle(q, -q) == pytest.approx(np.zeros(1), abs=1e-6)
 
 
 def test_a_ninety_degree_rotation_reads_as_ninety_degrees():
     a = np.array([[0.0, 0.0, 0.0, 1.0]])
     b = np.array([[0.0, 0.0, np.sin(np.pi / 4), np.cos(np.pi / 4)]])
 
-    assert quat_angle_xyzw(a, b) == pytest.approx(np.array([90.0]), abs=1e-4)
+    assert quat_angle(a, b) == pytest.approx(np.array([90.0]), abs=1e-4)
 
 
 def test_stats_report_the_tail_not_only_the_mean():

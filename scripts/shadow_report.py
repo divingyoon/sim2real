@@ -26,8 +26,11 @@ from pathlib import Path
 import numpy as np
 
 
-def quat_angle_xyzw(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """행 단위 두 xyzw 쿼터니언 사이 각[deg]. 부호 모호성은 abs 로 접는다."""
+def quat_angle(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """행 단위 두 쿼터니언 사이 각[deg]. 성분 순서와 무관하고, 부호 모호성은 abs 로 접는다.
+
+    q 와 −q 는 같은 자세다 — abs 를 빼면 같은 자세를 180° 로 보고한다.
+    """
     a = a / np.linalg.norm(a, axis=-1, keepdims=True)
     b = b / np.linalg.norm(b, axis=-1, keepdims=True)
     dot = np.abs(np.sum(a * b, axis=-1))
@@ -85,7 +88,7 @@ def report_sim(sim, lines):
     palm_fk = sim["palm_fk_pos"][:, 0]
     tcp = sim["tcp_pos"][:, 0]
     l1 = np.linalg.norm(palm_fk - palm_cmd, axis=-1) * 1000.0
-    l1_rot = quat_angle_xyzw(sim["palm_fk_quat_xyzw"][:, 0], sim["palm_cmd_quat_xyzw"][:, 0])
+    l1_rot = quat_angle(sim["palm_fk_quat_wxyz"][:, 0], sim["palm_cmd_quat_wxyz"][:, 0])
     l2 = np.linalg.norm(tcp - palm_fk, axis=-1) * 1000.0
     joints = [str(x) for x in sim["meta_joint_names"]]
     track = np.abs(sim["arm_meas"][:, 0] - sim["arm_target"][:, 0])
