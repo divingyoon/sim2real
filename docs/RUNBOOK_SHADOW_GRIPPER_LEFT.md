@@ -47,6 +47,21 @@ git worktree add --detach /tmp/hdgp_bc86ca5 bc86ca5          # 학습 시점 FAB
 
 `--gravity_comp off` 로 한 벌 더 뜨면 처짐 보상 유무를 실기에서 비교할 수 있다.
 
+## 0-2. Fabrics 연동 관문 (로봇 불필요, ~1분)
+
+배포 인터프리터의 Fabrics 가 Isaac 과 같은 해를 내는지 — 실기에서 Fabrics 를 돌리기 전에
+반드시 통과해야 한다. 자산이나 라이브러리가 갈리면 여기서 걸린다.
+
+```bash
+python3 scripts/probe_fabric_deploy_parity.py --sim logs/shadow/sim_fab_test16_gcON.npz
+```
+
+기대: `TCP 최대 ≤ 1 mm`. 08.25 실측 **0.152 mm** (§6-4).
+파라미터가 메타에 없는 옛 기록이면 `--dt/--decimation/--damping/--home` 으로 명시한다.
+
+★ **이 그림자 테스트에서 Fabrics 는 실기에 돌지 않는다.** sim 이 풀어 둔 관절 목표를
+실기가 따라갈 뿐이다. 실기에서 Fabrics 를 도는 라이브 노드는 아직 없다(§6-4 ④).
+
 ## 1. 사전 점검 (하드웨어 켜기 전)
 
 ```bash
@@ -103,6 +118,11 @@ robotctl pose ready --group openarm_left_arm --execute     # 2단계, 0.1 rad/s
 python3 scripts/lowlevel_check.py --robot gripper_left --group arm --dry-run
 python3 scripts/lowlevel_check.py --robot gripper_left --group arm --execute
 ```
+
+⚠ **유휴 우팔을 rest 로 두고 시작한다.** fabric world 가 그 팔을 고정 위치의 구로 세워
+두므로, 다른 곳에 있으면 계획된 궤적이 이 장면에서 안전하다는 근거가 없다. 재생기가
+시작 전에 확인하고 어긋나면 **관절명을 지목하며 거부**한다.
+`robotctl pose rest --group openarm_right_arm --execute` 로 정리할 것.
 
 - **TEST1 hold 드리프트** = 좌팔 실측 중력 처짐. §6-2 예측 **53 mm** 와 대조한다.
 - **TEST2 단일관절 스텝** = 부호·배율·crosstalk, 그리고 **지연**(명령→측정 63 % 도달 시각).

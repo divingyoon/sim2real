@@ -145,3 +145,50 @@ def test_the_abort_threshold_is_tighter_than_the_droop_we_predict():
 
     assert ABORT_TRACKING_ERR_RAD > predicted_droop_rad * 3
     assert ABORT_TRACKING_ERR_RAD < 0.5
+
+
+def test_the_idle_arm_pose_the_world_model_assumes_is_available(profile):
+    """fabric world 는 유휴 우팔을 **고정 위치의 구**로 세워 둔다.
+
+    `open_gripper_left_boxes_no_table.yaml` 의 `right_arm_body` 가 (0.25, −0.20, 0.55)
+    반경 0.15 다. sim 은 유휴 팔을 `RIGHT_ARM_REST_JOINT_POS` 로 고정한 채 학습하므로 그
+    구가 팔을 대표한다. 실기 우팔이 다른 곳에 있으면 두 가지가 동시에 틀린다 —
+    fabric 이 **없는 장애물**을 피하고, **있는 팔**은 피하지 않는다.
+
+    그래서 재생기는 시작 전에 유휴 팔 자세를 확인할 수 있어야 한다. 확인할 값이 있는지가
+    먼저다(`grasp_inference` 는 같은 이유로 `IDLE_ARM_MISMATCH_RAD` 게이트를 둔다).
+    """
+    from robot_profile import idle_arm_rest_pose
+
+    rest = idle_arm_rest_pose(profile)
+
+    assert len(rest) == len(profile.idle_arm_canonical) == 7
+    assert all(np.isfinite(rest))
+
+
+def test_the_replayer_refuses_to_start_when_the_idle_arm_is_out_of_place():
+    """확인만 하고 넘어가면 확인이 아니다 — 어긋나면 거부해야 한다."""
+    from shadow_replay import IDLE_ARM_MISMATCH_RAD, idle_arm_offenders
+
+    rest = np.array([0.0, 0.3, 0.0, 2.0, 0.0, 0.0, 0.0])
+    names = [f"r_aj_{i}" for i in range(1, 8)]
+
+    assert idle_arm_offenders(rest, rest, names, IDLE_ARM_MISMATCH_RAD) == []
+
+    moved = rest.copy()
+    moved[3] += IDLE_ARM_MISMATCH_RAD * 2
+    offenders = idle_arm_offenders(moved, rest, names, IDLE_ARM_MISMATCH_RAD)
+
+    assert [name for name, _, _ in offenders] == ["r_aj_4"], offenders
+
+
+def test_a_small_idle_arm_deviation_is_tolerated():
+    """실기 팔은 중력으로 처진다 — 처짐까지 거부하면 아무 때도 시작 못 한다."""
+    from shadow_replay import IDLE_ARM_MISMATCH_RAD, idle_arm_offenders
+
+    rest = np.zeros(7)
+    drooped = rest.copy()
+    drooped[1] = IDLE_ARM_MISMATCH_RAD * 0.5
+
+    assert idle_arm_offenders(drooped, rest, [f"r_aj_{i}" for i in range(1, 8)],
+                              IDLE_ARM_MISMATCH_RAD) == []

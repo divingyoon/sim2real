@@ -45,8 +45,30 @@ from shadow_replay_core import ReplayPlan                        # noqa: E402
 
 #: 중단 조건. 넘으면 즉시 멈춘다 — 재생은 언제든 다시 하면 되고 팔은 하나뿐이다.
 ABORT_TRACKING_ERR_RAD = 0.30
+#: 유휴(반대편) 팔이 rest 에서 이만큼 벗어나면 **시작하지 않는다**.
+#  fabric world 가 유휴 우팔을 (0.25, −0.20, 0.55) 반경 0.15 의 구로 세워 두기 때문이다
+#  (`open_gripper_left_boxes_no_table.yaml`). 실기 우팔이 다른 곳에 있으면 fabric 은
+#  **없는 장애물**을 피하고 **있는 팔**은 피하지 않는다. 값은 `grasp_inference` 와 같다 —
+#  중력 처짐(예측 수십 mrad)은 통과시키고 자세가 다른 경우만 잡는 폭이다.
+IDLE_ARM_MISMATCH_RAD = 0.15
 ABORT_EFFORT_NM = {"l_aj_5": 5.0, "l_aj_6": 5.0, "l_aj_7": 5.0}
 ABORT_STATE_STALE_SEC = 1.0
+
+
+def idle_arm_offenders(measured, rest, names, tolerance):
+    """rest 에서 `tolerance` 를 넘은 유휴 팔 관절 목록 [(이름, 실측, 기대)].
+
+    거부는 반드시 **범인을 지목**해야 한다. 이름 없는 거부는 "자세가 이상한가 프로필이
+    틀렸나"를 구분하지 못하게 만든다(robot_control 의 SafetyError 가 같은 이유로
+    offender 를 명명한다).
+    """
+    measured = np.asarray(measured, dtype=float).reshape(-1)
+    rest = np.asarray(rest, dtype=float).reshape(-1)
+    return [
+        (name, float(measured[i]), float(rest[i]))
+        for i, name in enumerate(names)
+        if abs(measured[i] - rest[i]) > tolerance
+    ]
 
 
 def build_plan(sim_npz: Path, rate_scale: float, profile) -> ReplayPlan:
@@ -106,6 +128,10 @@ def main() -> int:
                         help="세트포인트 전진 상한[rad/s]. 재생 요구와 별개인 안전 캡.")
     parser.add_argument("--frames", type=int, default=0, help=">0 이면 앞에서 그만큼만")
     parser.add_argument("--log", type=Path, default=None, help="발행·측정 csv")
+    parser.add_argument("--allow-idle-arm-mismatch", action="store_true",
+                        help="유휴 팔이 rest 밖이어도 시작한다. fabric world 가 그 팔을 "
+                             "고정 위치의 구로 세워 두므로, 켜기 전에 실제 우팔이 어디 "
+                             "있는지 눈으로 확인할 것.")
     parser.add_argument("--execute", action="store_true",
                         help="이것 없으면 계획만 출력하고 아무것도 발행하지 않는다")
     args = parser.parse_args()
@@ -153,6 +179,7 @@ def main() -> int:
                                      self._state_cb, qos_profile_sensor_data)
 
             self.measured = np.zeros(len(plan.joint_names))
+            self.idle_measured = np.zeros(len(profile.idle_arm_canonical))
             self.effort = np.zeros(len(plan.joint_names))
             self.last_state = 0.0
             self._src_index: dict[str, int] = {}
@@ -174,6 +201,12 @@ def main() -> int:
                 self.measured[k] = msg.position[i] * sign
                 if msg.effort and i < len(msg.effort):
                     self.effort[k] = msg.effort[i]
+            for k, src in enumerate(self.profile.idle_arm_source):
+                i = self._src_index.get(src)
+                if i is None:
+                    continue
+                sign = self.profile.joint_limits[self.profile.idle_arm_canonical[k]]["sign"]
+                self.idle_measured[k] = msg.position[i] * sign
             self.last_state = time.monotonic()
 
         def start(self) -> None:
@@ -184,12 +217,43 @@ def main() -> int:
                 raise SystemExit(
                     f"{self.profile.topics['arm_state']} 를 못 받았다 — bringup 확인"
                 )
+            self._check_idle_arm()
             self.ramp = self.plan.ramp_from(self.measured.copy())
             self.setpoint = self.measured.copy()
             self.get_logger().info(
                 f"실측에서 첫 프레임까지 램프 {len(self.ramp)} 프레임 "
                 f"({len(self.ramp)*self.plan.publish_dt:.1f} s)")
             self.timer = self.create_timer(self.plan.publish_dt, self._tick)
+
+        def _check_idle_arm(self) -> None:
+            """유휴 팔이 sim 이 가정한 자리에 있는가.
+
+            fabric world 는 그 팔을 고정 위치의 구로 세워 둔다. 다른 곳에 있으면 계획된
+            궤적이 그 장면에서 안전하다는 근거가 사라진다 — 없는 장애물을 피하고 있는
+            팔은 피하지 않는다.
+            """
+            from robot_profile import idle_arm_rest_pose
+
+            rest = idle_arm_rest_pose(self.profile)
+            offenders = idle_arm_offenders(
+                self.idle_measured, rest,
+                list(self.profile.idle_arm_canonical), IDLE_ARM_MISMATCH_RAD)
+            if not offenders:
+                self.get_logger().info("유휴 팔 rest 확인 — sim 이 가정한 장면과 일치")
+                return
+            detail = ", ".join(
+                f"{n} {m:+.3f} (기대 {e:+.3f})" for n, m, e in offenders)
+            if args.allow_idle_arm_mismatch:
+                self.get_logger().warning(f"유휴 팔이 rest 밖인데 진행한다: {detail}")
+                return
+            raise SystemExit(
+                f"유휴 팔이 rest 에서 벗어나 있다: {detail}\n"
+                f"  fabric world 가 그 팔을 고정 위치의 구로 세워 두므로 계획된 궤적이\n"
+                f"  이 장면에서 안전하다는 근거가 없다. `robotctl pose rest --group\n"
+                f"  {'openarm_right_arm' if self.profile.acting_side == 'left' else 'openarm_left_arm'}"
+                f" --execute` 로 정리하거나, 눈으로 확인한 뒤\n"
+                f"  --allow-idle-arm-mismatch 로 진행할 것."
+            )
 
         def _abort(self, why: str) -> None:
             self.aborted = why
