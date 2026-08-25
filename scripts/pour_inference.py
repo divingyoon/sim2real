@@ -101,6 +101,10 @@ def _t(vals, device):
 
 
 class PourInferenceNode(Node):
+    # 서브클래스가 action 차원을 바꿀 수 있게 클래스 속성으로 노출
+    # (both/pour_sensor 양팔 배포는 15D — pour_sensor_inference.py 참조).
+    ACTION_DIM = NUM_ACTIONS
+
     def __init__(
         self,
         agent_yaml: str,
@@ -121,7 +125,7 @@ class PourInferenceNode(Node):
             agent_yaml_path=agent_yaml,
             checkpoint_path=checkpoint_path,
             obs_dim=OBS_DIM,
-            action_dim=NUM_ACTIONS,
+            action_dim=self.ACTION_DIM,
             device=device,
         )
 
@@ -166,7 +170,7 @@ class PourInferenceNode(Node):
         self.step_count = 0
         self.decoder_state = PourDecoderState()
         self.grasp_offset: tuple[np.ndarray, np.ndarray] | None = None
-        self.last_actions = np.zeros(NUM_ACTIONS)
+        self.last_actions = np.zeros(self.ACTION_DIM)
 
         # ── ROS2 ────────────────────────────────────────────────────────────
         self.create_subscription(JointState, "/joint_states", self._arm_cb, 10)
@@ -240,7 +244,7 @@ class PourInferenceNode(Node):
         # sim 에피소드 시작 재현: LSTM hidden·디코더 상태·fabric q 초기화
         self.policy.reset_states()
         self.decoder_state = PourDecoderState()
-        self.last_actions = np.zeros(NUM_ACTIONS)
+        self.last_actions = np.zeros(self.ACTION_DIM)
         self.step_count = 0
         q0 = torch.cat(
             [_t(self.arm_pos, self.device), _t(self.hand_pos, self.device)]

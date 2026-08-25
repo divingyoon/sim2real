@@ -33,6 +33,12 @@ def load_profile_joints(path: str | Path) -> dict[str, dict]:
             "lower": float(j["lower"]),
             "upper": float(j["upper"]),
             "unit": j.get("unit", "rad"),
+            # 속도·토크 상한도 프로필의 일부다. 리맵은 위치만 쓰지만, 재생 계획이
+            # "이 궤적이 실기 한계를 넘는가"를 재생 **전에** 답하려면 여기 있어야 한다.
+            # 없으면 None — 소비자가 "한계를 모른다"고 말하게 한다. 0 이나 inf 로 채우면
+            # 그 판정이 조용히 통과하거나 조용히 막힌다.
+            "velocity": float(j["velocity"]) if "velocity" in j else None,
+            "effort": float(j["effort"]) if "effort" in j else None,
         }
     return out
 

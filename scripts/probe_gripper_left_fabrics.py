@@ -41,7 +41,6 @@ import numpy as np
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
-from gripper_left_palm_command import PalmCommandBuilder  # noqa: E402
 
 DEFAULT_HDGP = Path.home() / "rl_ws/hdgp"
 
@@ -133,18 +132,29 @@ def main() -> int:
     damping = preset.FABRIC_DAMPING_GAIN * torch.ones(1, 1, device=device)
     pca_zeros = torch.zeros(1, 5, device=device)
 
+    box_low = np.array([preset.PALM_BOX_X[0], preset.PALM_BOX_Y[0], preset.PALM_BOX_Z[0]])
+    box_high = np.array([preset.PALM_BOX_X[1], preset.PALM_BOX_Y[1], preset.PALM_BOX_Z[1]])
+    box_center, box_half = 0.5 * (box_low + box_high), 0.5 * (box_high - box_low)
+    ref_quat_wxyz = np.array(preset.PALM_REF_QUAT_WXYZ)
+
     def run_to(target_action6, steps):
-        """홈에서 출발해 목표를 `steps` 만큼 유지하고 (오차, 최종 관절)을 돌려준다."""
-        builder = PalmCommandBuilder.from_preset(preset)
+        """홈에서 출발해 목표를 `steps` 만큼 유지하고 (오차, 최종 관절)을 돌려준다.
+
+        ★여기서 지령하는 것은 **정지 목표**뿐이다(박스 중심과 꼭짓점). 그래서 액션 항의
+          변화율 상한·회전 규약을 흉내 낼 필요가 없다 — 그걸 복제하면 sim 이 규약을 바꿀
+          때마다 이 프로브가 조용히 옛 계약을 재게 된다(08.25 에 실제로 그렇게 갈렸다).
+        """
         q = torch.tensor(home, device=device, dtype=torch.float32).unsqueeze(0).contiguous()
         qd = torch.zeros(1, 7, device=device)
         qdd = torch.zeros(1, 7, device=device)
         features = torch.zeros(1, 7, device=device)
-        pos = quat = None
+        action = np.asarray(target_action6, dtype=float)
+        pos = box_center + np.clip(action[:3], -1.0, 1.0) * box_half
+        quat = ref_quat_wxyz                      # 회전은 기준 자세 고정
+        features[0] = torch.tensor(
+            np.concatenate([pos, quat[1:4], quat[:1]]),   # set_features 규약 = xyzw
+            device=device, dtype=torch.float32)
         for _ in range(steps):
-            pos, quat = builder.step(np.asarray(target_action6, dtype=float))
-            features[0] = torch.tensor(PalmCommandBuilder.as_features(pos, quat),
-                                       device=device, dtype=torch.float32)
             fabric.set_features(pca_zeros, features, "quaternion",
                                 q.detach(), qd.detach(), object_ids, object_indicator, damping)
             for _ in range(int(preset.FABRIC_DECIMATION)):
