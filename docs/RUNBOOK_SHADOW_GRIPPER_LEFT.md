@@ -30,6 +30,23 @@
 
 ---
 
+## 0-1. 기록을 다시 만들려면 (Isaac 필요)
+
+FABRICS 를 학습 시점으로 고정해야 한다. 저장소 사본을 쓰면 `openarm.tasks` 가 그것을
+`sys.path[0]` 에 꽂아 PYTHONPATH 를 이기고, 두 트리는 같은 목표에서 관절 해가 최대
+0.32 rad 갈린다(08.25 실측). 그래서 프로브에 `--fabrics_src` 를 준다.
+
+```bash
+cd ~/rl_ws/hdgp
+git worktree add --detach /tmp/hdgp_bc86ca5 bc86ca5          # 학습 시점 FABRICS
+../IsaacLab/isaaclab.sh -p scripts/probes/probe_fab_shadow_record.py \
+    --checkpoint log/rl_games/open-grip/left/grasp-sensor-fab/fab_test16/nn/open-grip_l_grasp_sensor_fab.pth \
+    --fabrics_src /tmp/hdgp_bc86ca5/source/FABRICS/src \
+    --steps 1200 --num_envs 1 --out logs/shadow/sim_fab_test16_gcON.npz
+```
+
+`--gravity_comp off` 로 한 벌 더 뜨면 처짐 보상 유무를 실기에서 비교할 수 있다.
+
 ## 1. 사전 점검 (하드웨어 켜기 전)
 
 ```bash
