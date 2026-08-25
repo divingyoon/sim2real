@@ -1,0 +1,68 @@
+# 로봇 구성 프로필 — **좌팔 7 DOF + 2지 평행 그리퍼** (자산 openarm_tesollo_sensor_rl).
+#
+# `tesollo_sensor__right` 와 **같은 로봇의 반대쪽**이다. 우팔에는 DG-5F 가, 좌팔에는 이
+# 그리퍼가 달려 있고 둘 다 실기 그대로다. 그래서 두 프로필은 자산 매니페스트를 공유하고
+# `acting_side` 와 EE 만 다르다.
+#
+# ★이 태스크만 다른 점이 두 가지 있다. 둘 다 배포 코드가 알아야 한다.
+#   ① **manager-based** 다(`isaaclab.envs:ManagerBasedRLEnv`). `grasp_left_env.py` 도
+#      `grasp_left_constants.py` 도 없다 — obs 차원은 ObservationManager 가 런타임에
+#      조립하므로 소스에서 셀 수 없다. 그래서 계약을 체크포인트에 대고 검증한다
+#      (`contract.source: checkpoint`).
+#   ② 팔 액션이 **절대 palm 6D** 다. `grasp_v1`/`grasp_sensor` 의 델타+기준점(anchor)
+#      규약이 아니다 — a=0 은 "기준점 유지"가 아니라 `PALM_BOX` 의 중심이다. 그래서
+#      `action_anchor` 개념 자체가 적용되지 않는다. 액션 산술은
+#      `scripts/gripper_left_palm_command.py` 가 preset 에서 받아 계산한다.
+name: gripper_left
+
+asset:
+  manifest: ../hdgp/assets/robot/openarm_tesollo_sensor_rl/openarm_tesollo_sensor_rl_manifest.yaml
+  fabrics:
+    # sim 학습과 동일 — `grasp_left_preset.FABRIC_ROBOT_DIR` / `FABRIC_WORLD_FILENAME`.
+    # 이 URDF 는 손 20관절을 fixed 로 동결해 cspace 가 팔 7 DOF 만 남는다.
+    # world 는 **좌팔 전용**이다. 우팔용을 쓰면 좌팔이 자기 대역물을 장애물로 읽는다.
+    robot_dir: openarm_tesollo_sensor_left_gripper
+    robot_name: openarm_tesollo_sensor_left_gripper
+    class: OpenArmGripperLeftPoseFabric
+    world: open_gripper_left_boxes_no_table
+
+acting_side: left
+
+end_effector:
+  # 매니페스트의 좌 EE 관절은 `l_hj_gripper_1` 하나다. sim USD 는 mimic 을 잃어 두 조를
+  # 다 지령해야 하지만(`grasp_left_preset.py:35-47`), 실기 URDF 는 mimic 이 살아 있어
+  # 한 개면 두 조가 함께 벌어진다 — SRDF 도 finger_joint2 를 passive_joint 로 적는다.
+  type: parallel_gripper
+  dof: 1
+
+contract:
+  hdgp_package: openarm.gripper.left.grasp_sensor
+  # 36 = joint_pos 9 + joint_vel 9 + object_position 3 + object_pose command 7
+  #      + last_action 7 + gripper_gate 1.  action 7 = palm 절대 6 + 그리퍼 이진 1.
+  # 소스에 이 숫자를 적어 둔 곳이 없어 체크포인트에서 읽어 검증한다.
+  obs_dim: 36
+  action_dim: 7
+  source: checkpoint
+  checkpoint: ../hdgp/log/rl_games/open-grip/left/grasp-sensor-fab/fab_test16/nn/open-grip_l_grasp_sensor_fab.pth
+
+action:
+  # 절대 규약. a=0 은 "기준점 유지"가 아니라 `PALM_BOX` 의 **중심**이다 —
+  # 델타+기준점 트랙(grasp_v1 / grasp_sensor)과 정반대이므로 그쪽 계약 테스트를
+  # 이 구성에 그대로 적용하면 안 된다. 산술은 scripts/gripper_left_palm_command.py.
+  convention: absolute_palm
+
+topics:
+  arm_state:  /joint_states
+  arm_cmd:    /isaacsim/left_arm_cmd
+  arm_traj:   /left_joint_trajectory_controller/joint_trajectory
+  # 좌 그리퍼 명령은 20D 손과 달리 **스칼라**다(std_msgs/Float64). Humble 에는
+  # parallel_gripper_action_controller 가 없어 left_gripper_controller 도 JTC 다.
+  ee_state:   /joint_states
+  ee_cmd:     /isaacsim/left_gripper_cmd
+  ee_traj:    /left_gripper_controller/joint_trajectory
+
+joint_profiles:
+  - ~/rl_ws/robot_control/src/robot_control/profiles/openarm_tesollo.yaml
+
+# 이 구성에는 손끝 F/T 가 없다 — 2지 그리퍼에 wrench broadcaster 가 없다.
+# 정책 obs 도 접촉력을 쓰지 않으므로(위 36D 내역 참조) tip_sensor 항목 자체를 두지 않는다.

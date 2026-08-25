@@ -27,7 +27,9 @@ if str(_SCRIPT_DIR) not in sys.path:
 
 from robot_profile import (  # noqa: E402
     HDGP_OPENARM_SRC,
+    DELTA_ANCHOR,
     available_profiles,
+    profiles_with_convention,
     hdgp_task_dir,
     load_hdgp_module,
     load_profile_env_cfg,
@@ -40,7 +42,13 @@ import grasp_obs_builder as O  # noqa: E402
 SIDES = ["right", "left"]
 PROFILES = {"right": "tesollo_bi_s__right", "left": "tesollo_bi_s__left"}
 # ★모든 구성(grasp_v1 좌/우, grasp_sensor …)을 자동으로 덮는다.
-ALL_PROFILES = available_profiles()
+# ★이 모듈은 **델타+기준점 규약**(palm delta 6D + 홈/컵 기준점, obs 154D / action 21D)을
+#   검증한다. `gripper/left/grasp_sensor` 는 절대 palm 규약이라 a=0 의 뜻부터 다르고
+#   손가락 적분기도 lift 래치도 없다 — 그쪽에 이 단언을 적용하면 사실이 아닌 것을 요구하게
+#   된다. 이름을 나열하지 않고 **프로필이 선언한 규약**으로 고르므로, 새 델타 구성은
+#   자동으로 대상이 되고 규약을 빠뜨린 구성은 로드 단계에서 거부된다.
+DELTA_ANCHOR_PROFILES = profiles_with_convention(DELTA_ANCHOR)
+ALL_PROFILES = DELTA_ANCHOR_PROFILES
 
 pytestmark = pytest.mark.skipif(not HDGP_OPENARM_SRC.exists(), reason="hdgp 소스 없음")
 

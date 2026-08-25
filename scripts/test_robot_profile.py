@@ -59,15 +59,22 @@ def test_profile_loads(name):
 
 @pytest.mark.parametrize("name", ALL_PROFILES)
 def test_joint_names_follow_manifest(name):
-    """관절 이름·순서의 진실원천은 자산 매니페스트다."""
+    """관절 이름·순서의 진실원천은 자산 매니페스트다.
+
+    EE 를 매니페스트에서 유도한다. 손가락 20개를 여기 적어 두면 그건 진실원천이 아니라
+    **두 번째 사본**이고, DG-5F 가 아닌 구성(좌 2지 그리퍼)에서 바로 어긋난다.
+    """
+    from robot_profile import load_manifest_joint_order
+
     p = load_robot_profile(name)
     prefix = p.side_prefix
+    order = load_manifest_joint_order(p.manifest_path)
+
     assert p.arm_canonical == tuple(f"{prefix}_aj_{i}" for i in range(1, 8))
-    fingers = ["thumb", "index", "middle", "ring", "pinky"]
-    assert p.ee_canonical == tuple(
-        f"{prefix}_hj_{f}_{j}" for f in fingers for j in range(1, 5)
-    )
-    assert len(p.arm_source) == 7 and len(p.ee_source) == 20
+    assert p.ee_canonical == tuple(j for j in order if j.startswith(f"{prefix}_hj_"))
+    assert p.ee_canonical, "매니페스트에 이 side 의 EE 관절이 없다"
+    assert len(p.arm_source) == 7
+    assert len(p.ee_source) == len(p.ee_canonical) == p.ee_dof
 
 
 @pytest.mark.parametrize("side,arm_src,ee_src", [
@@ -223,6 +230,17 @@ def test_idle_arm_resolved(name):
     assert len(rest) == 7
 
 
+def _mirrors_the_home_pose(profile) -> bool:
+    """sim 이 유휴 팔 rest 를 파지 팔 홈에서 **만들어 내는가**.
+
+    DirectRL 트랙의 `grasp_{side}_env.py` 는 `_ARM_MIRROR_SIGN` 으로 rest 를 홈에서
+    파생한다. manager-based 인 gripper/left 에는 그 파일도 그 구성도 없고, 유휴 우팔은
+    독립적으로 정한 주차 자세다(`RIGHT_ARM_REST_JOINT_POS = [0, 0.3, 0, 2.0, 0, 0, 0]`).
+    거기에 미러 관계를 요구하면 **사실이 아닌 것을 단언**하게 된다.
+    """
+    return (hdgp_task_dir(profile) / f"grasp_{profile.acting_side}_env.py").exists()
+
+
 @pytest.mark.parametrize("name", ALL_PROFILES)
 def test_idle_arm_rest_is_mirror_of_home(name):
     """유휴 팔 rest = 파지 팔 홈의 부호 미러 — sim `_build_home_pose` 가 강제하는 관계."""
@@ -233,6 +251,8 @@ def test_idle_arm_rest_is_mirror_of_home(name):
     )
 
     p = load_robot_profile(name)
+    if not _mirrors_the_home_pose(p):
+        pytest.skip("sim 이 rest 를 홈에서 파생하지 않는 구성 — 아래 테스트가 따로 덮는다")
     sign = np.array(load_arm_mirror_sign(p)[:7])
     q_home = np.array(expected_q_home_arm(p))
     rest = np.array(idle_arm_rest_pose(p))
@@ -240,6 +260,23 @@ def test_idle_arm_rest_is_mirror_of_home(name):
         f"{name}: 유휴 팔 rest 가 홈의 미러가 아니다\n  rest={rest.round(4)}\n"
         f"  기대={(sign * q_home).round(4)}"
     )
+
+
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_the_idle_arm_rest_is_readable_whether_or_not_it_is_a_mirror(name):
+    """위 테스트가 skip 된 구성도 유휴 팔 자세는 반드시 읽혀야 한다.
+
+    실기 유휴 팔이 sim 과 다른 곳에 있으면 장면이 다르고, 학습된 궤적은 그 장면에서
+    안전하다는 근거를 잃는다. 미러인지 아닌지와 무관하게 **값이 있어야** 확인할 수 있다.
+    """
+    from robot_profile import idle_arm_rest_pose
+
+    p = load_robot_profile(name)
+
+    rest = idle_arm_rest_pose(p)
+
+    assert len(rest) == 7
+    assert all(np.isfinite(rest))
 
 
 def test_grasp_sensor_home_differs_from_bi_s():
@@ -251,3 +288,140 @@ def test_grasp_sensor_home_differs_from_bi_s():
     a = np.array(expected_q_home_arm(load_robot_profile("tesollo_sensor__right")))
     b = np.array(expected_q_home_arm(load_robot_profile("tesollo_bi_s__right")))
     assert np.abs(a - b).max() > 0.1, "두 구성의 홈이 같다면 자산 가정이 틀렸다"
+
+
+# --------------------------------------------------------------------------
+# manager-based 구성 (gripper/left/grasp_sensor) — 검증이 조용히 사라지면 안 된다
+# --------------------------------------------------------------------------
+
+MANAGER_BASED = "gripper_left"
+
+
+def _needs_gripper_left():
+    if MANAGER_BASED not in ALL_PROFILES:
+        pytest.skip(f"{MANAGER_BASED} 프로필 없음")
+    return load_robot_profile(MANAGER_BASED)
+
+
+def test_the_fabrics_check_actually_runs_for_a_manager_based_task():
+    """★skip 은 통과가 아니다.
+
+    `test_fabrics_asset_matches_sim` 은 `grasp_{side}_env.py` 를 찾는다. manager-based
+    태스크에는 그 파일이 없으니 조용히 skip 되고, 자산이 어긋나도 아무도 모른다 —
+    이 저장소가 obs 계약 추출기에서 이미 한 번 당한 실패 방식이다. 그러니 그 태스크의
+    자산 이름이 실제로 **어딘가에서 읽혀 대조되는지**를 따로 못박는다.
+    """
+    from robot_profile import sim_fabrics_assets, sim_fabrics_worlds
+
+    profile = _needs_gripper_left()
+
+    assets = sim_fabrics_assets(profile)
+    worlds = sim_fabrics_worlds(profile)
+
+    assert assets, "sim 소스에서 fabric 자산 이름을 하나도 못 찾았다 — 검사가 무의미하다"
+    assert worlds, "sim 소스에서 fabric world 이름을 하나도 못 찾았다"
+    assert profile.fabrics.robot_dir in assets, (profile.fabrics.robot_dir, sorted(assets))
+    assert profile.fabrics.world in worlds, (profile.fabrics.world, sorted(worlds))
+
+
+def test_the_gripper_profile_names_the_single_jaw_the_manifest_declares():
+    """자산 매니페스트에 좌 그리퍼 관절은 `l_hj_gripper_1` 하나뿐이다.
+
+    sim USD 는 mimic 을 잃어 두 조를 다 지령하지만(preset 주석), 실기 URDF 는 mimic 이
+    살아 있고 매니페스트도 한 개만 싣는다. 배포가 두 개를 보내려 하면 여기서 걸린다.
+    """
+    profile = _needs_gripper_left()
+
+    assert profile.ee_canonical == ("l_hj_gripper_1",)
+    assert profile.ee_dof == 1
+
+
+def test_the_gripper_stroke_matches_the_description(): 
+    """프로필 한계가 실기 스트로크(0.044 m)여야 한다 — robot_control 프로필에서 온다."""
+    profile = _needs_gripper_left()
+
+    limit = profile.joint_limits["l_hj_gripper_1"]
+
+    assert limit["lower"] == pytest.approx(0.0)
+    assert limit["upper"] == pytest.approx(0.044)
+
+
+def test_a_manager_based_contract_is_verified_against_the_checkpoint():
+    """차원의 진실원천이 소스에 없으면 체크포인트다 — 건너뛰지 않는다.
+
+    이 태스크는 `*_constants.py` 가 없다. obs 차원은 `ObservationManager` 가 런타임에
+    조립하므로 정적으로는 셀 수 없다. 그래서 계약을 **학습 산출물**에 대고 검증한다:
+    actor 첫 층이 obs, mu 헤드가 action 이다. 추측이 들어갈 자리가 없다.
+    """
+    from robot_profile import checkpoint_contract
+
+    profile = _needs_gripper_left()
+    checkpoint = profile.contract.checkpoint
+    assert checkpoint is not None, "manager-based 구성은 체크포인트를 지목해야 한다"
+    if not checkpoint.is_file():
+        pytest.skip(f"체크포인트 부재: {checkpoint}")
+
+    obs_dim, action_dim = checkpoint_contract(checkpoint)
+
+    assert (obs_dim, action_dim) == (profile.contract.obs_dim, profile.contract.action_dim)
+
+
+# --------------------------------------------------------------------------
+# 액션 규약 — 짐작하면 §8 의 사고가 그대로 재현된다
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("name", ALL_PROFILES)
+def test_every_profile_declares_what_its_action_means(name):
+    """규약을 안 적으면 배포가 a=0 의 뜻을 짐작한다.
+
+    §8 이 그 사고다: sim 은 a=0 을 "컵 정준 pregrasp 로 접근"으로, 배포는 "홈에 머물라"로
+    읽었고 팔은 홈 근처에서만 움직였다. 값이 아니라 **의미**를 계약에 넣는다.
+    """
+    from robot_profile import ACTION_CONVENTIONS
+
+    p = load_robot_profile(name)
+
+    assert p.action_convention in ACTION_CONVENTIONS
+
+
+def test_a_profile_without_a_declared_convention_is_refused(tmp_path):
+    """기본값을 두지 않는다 — 기본값은 조용한 짐작의 다른 이름이다."""
+    source = ROBOT_CONFIG_DIR / f"{ALL_PROFILES[0]}.yaml"
+    raw = yaml.safe_load(source.read_text())
+    raw.pop("action", None)
+    broken = tmp_path / "no_convention.yaml"
+    broken.write_text(yaml.safe_dump(raw, allow_unicode=True))
+
+    with pytest.raises(ValueError, match="action.convention"):
+        load_robot_profile(broken)
+
+
+def test_the_two_conventions_partition_the_profiles():
+    """모든 구성이 정확히 한 쪽에 속한다 — 어느 쪽에도 없으면 계약 테스트에서 사라진다."""
+    from robot_profile import ABSOLUTE_PALM, DELTA_ANCHOR, profiles_with_convention
+
+    delta = set(profiles_with_convention(DELTA_ANCHOR))
+    absolute = set(profiles_with_convention(ABSOLUTE_PALM))
+
+    assert delta.isdisjoint(absolute)
+    assert delta | absolute == set(ALL_PROFILES)
+
+
+def test_the_absolute_convention_is_what_the_sim_action_term_implements():
+    """선언만 하고 sim 이 다르면 선언이 거짓말이 된다.
+
+    절대 규약의 표식은 액션 항이 박스 중심에 정규화 액션을 얹는다는 것이다. 델타 규약이면
+    거기에 기준점(anchor) 버퍼가 들어간다.
+    """
+    from robot_profile import ABSOLUTE_PALM
+
+    profile = _needs_gripper_left()
+    assert profile.action_convention == ABSOLUTE_PALM
+
+    term = hdgp_task_dir(profile) / "grasp_left_fabric_action.py"
+    if not term.is_file():
+        pytest.skip(f"액션 항 소스 없음: {term}")
+    source = term.read_text()
+
+    assert "self._box_center + actions[:, :3].clamp(-1.0, 1.0) * self._box_half" in source
+    assert "pregrasp" not in source, "절대 규약이라 선언했는데 기준점 개념이 소스에 있다"

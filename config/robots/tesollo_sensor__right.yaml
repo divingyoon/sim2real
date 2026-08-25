@@ -47,3 +47,10 @@ tip_sensor:
   # ⚠️ 미검증 — 실물 wrench 프레임·부호 규약 확정 전까지 identity/+1.
   frame_rotation: identity
   force_sign: 1.0
+
+action:
+  # 팔 액션이 무엇을 뜻하는가. 이게 계약의 일부인 이유는 §8 에 있다 — `palm_delta` 같은
+  # 스칼라만 sim 과 대조해서는 부족하고, **무엇을 기준으로 한 델타인지**까지 맞춰야 한다.
+  #   delta_anchor  : palm delta 6D + 기준점(홈 또는 컵 정준 pregrasp). a=0 = 기준점 유지.
+  #   absolute_palm : palm 절대 6D. a=0 = PALM_BOX 중심. 기준점 개념이 없다.
+  convention: delta_anchor

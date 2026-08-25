@@ -23,6 +23,7 @@ palm 은 obs 154D 중 36차원의 기준이자 Fabrics IK 목표이므로 관측
 from __future__ import annotations
 
 import ast
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,6 +35,24 @@ WS_ROOT = SIM2REAL_ROOT.parent          # ~/rl_ws — 매니페스트 등 저장
 ROBOT_CONFIG_DIR = SIM2REAL_ROOT / "config" / "robots"
 
 _SIDE_PREFIX = {"right": "r", "left": "l"}
+
+#: 팔 액션 규약. 기본값을 두지 않는다 — 짐작이 곧 §8 의 사고다.
+DELTA_ANCHOR = "delta_anchor"
+ABSOLUTE_PALM = "absolute_palm"
+ACTION_CONVENTIONS = frozenset({DELTA_ANCHOR, ABSOLUTE_PALM})
+
+
+def profiles_with_convention(convention: str) -> list[str]:
+    """그 규약을 선언한 구성 이름들. 계약 테스트가 대상을 고를 때 쓴다.
+
+    이름을 테스트에 나열하지 않는 이유: 새 구성이 추가되면 자동으로 대상이 되어야 하고,
+    빠지더라도 **조용히** 빠지면 안 된다. 규약 필드가 그 판정을 대신한다.
+    """
+    out = []
+    for name in available_profiles():
+        if load_robot_profile(name).action_convention == convention:
+            out.append(name)
+    return out
 
 
 @dataclass(frozen=True)
@@ -48,11 +67,20 @@ class FabricsAsset:
 
 @dataclass(frozen=True)
 class PolicyContract:
-    """정책 계약. hdgp 상수와 대조해 검증한다."""
+    """정책 계약과 **그것을 무엇에 대고 검증하는지**.
+
+    DirectRL 태스크는 `grasp_{side}_constants.py` 에 `NUM_OBSERVATIONS` 를 적어 두므로
+    소스가 진실원천이다. manager-based 태스크(`gripper/left/grasp_sensor`)는 그런 파일이
+    없다 — obs 는 `ObservationManager` 가 런타임에 조립하고, 항의 차원은 대부분 상위
+    스코프라 정적으로 셀 수 없다. 그 경우 진실원천은 **학습 산출물**이다: actor 첫 층이
+    obs, mu 헤드가 action. 어느 쪽이든 검증을 건너뛰지는 않는다.
+    """
 
     hdgp_package: str
     obs_dim: int
     action_dim: int
+    source: str = "constants"           # "constants" | "checkpoint"
+    checkpoint: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -76,6 +104,11 @@ class RobotProfile:
     idle_arm_source: tuple[str, ...]
     joint_limits: dict[str, dict]       # canonical → {source, sign, lower, upper, unit}
     tip_force_sign: float
+    # 팔 액션이 무엇을 뜻하는가 — "delta_anchor" | "absolute_palm".
+    # §8 의 교훈을 계약으로 올린 것이다: 스칼라만 맞춰서는 부족하고 **무엇을 기준으로 한
+    # 델타인지**까지 선언해야 한다. 두 규약은 a=0 의 의미가 정반대라서, 하나를 위해 쓴
+    # 계약 테스트를 다른 쪽에 적용하면 사실이 아닌 것을 단언하게 된다.
+    action_convention: str
 
     @property
     def side_prefix(self) -> str:
@@ -164,6 +197,50 @@ def idle_arm_rest_pose(profile: "RobotProfile") -> list[float]:
 HDGP_OPENARM_SRC = WS_ROOT / "hdgp" / "source" / "openarm"
 
 
+_ACTOR_FIRST_LAYER = "a2c_network.actor_mlp.0.weight"
+_MU_HEAD = "a2c_network.mu.weight"
+
+
+def checkpoint_contract(checkpoint: Path) -> tuple[int, int]:
+    """rl_games 체크포인트가 **실제로** 학습된 (obs, action) 차원.
+
+    두 텐서의 모양이 전부다. 없으면 예외를 던진다 — 짐작한 차원으로 정책을 로드하면
+    shape mismatch 로 죽거나(운이 좋은 경우) 잘못된 obs 로 조용히 돈다.
+    """
+    import torch
+
+    blob = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    state = blob.get("model", blob) if isinstance(blob, dict) else blob
+    missing = [k for k in (_ACTOR_FIRST_LAYER, _MU_HEAD) if k not in state]
+    if missing:
+        raise KeyError(
+            f"{checkpoint}: 계약을 읽을 텐서가 없다 {missing}\n"
+            f"  (rl_games LSTM/MLP actor 체크포인트가 맞는지 확인할 것)"
+        )
+    return int(state[_ACTOR_FIRST_LAYER].shape[1]), int(state[_MU_HEAD].shape[0])
+
+
+def _check_contract_against_checkpoint(contract: PolicyContract) -> None:
+    if contract.checkpoint is None:
+        raise ValueError(
+            f"{contract.hdgp_package}: source=checkpoint 인데 contract.checkpoint 가 없다"
+        )
+    if not contract.checkpoint.is_file():
+        # 학습 머신에만 있는 산출물이라 배포 머신에서는 없을 수 있다. 그래도 조용히
+        # 넘기지 않고 무엇을 못 봤는지 말한다 — 테스트가 이 경로를 따로 덮는다.
+        print(
+            f"[robot_profile] 경고: 체크포인트가 없어 계약을 검증하지 못했다: "
+            f"{contract.checkpoint}"
+        )
+        return
+    obs_dim, action_dim = checkpoint_contract(contract.checkpoint)
+    if (obs_dim, action_dim) != (contract.obs_dim, contract.action_dim):
+        raise ValueError(
+            f"계약 불일치: 프로필 obs={contract.obs_dim} act={contract.action_dim} != "
+            f"체크포인트 obs={obs_dim} act={action_dim} ({contract.checkpoint})"
+        )
+
+
 def _check_contract(contract: PolicyContract) -> None:
     """hdgp 상수와 대조.
 
@@ -173,6 +250,12 @@ def _check_contract(contract: PolicyContract) -> None:
     """
     import importlib
     import sys
+
+    if contract.source == "checkpoint":
+        _check_contract_against_checkpoint(contract)
+        return
+    if contract.source != "constants":
+        raise ValueError(f"contract.source 는 constants|checkpoint — 받은 값 {contract.source!r}")
 
     if not HDGP_OPENARM_SRC.exists():
         return                            # hdgp 부재 — parity 테스트가 별도로 잡는다
@@ -239,11 +322,22 @@ def load_robot_profile(name_or_path: str | Path) -> RobotProfile:
             f"\n  (좌 Tesollo 라면 config/openarm_tesollo_left_hand.yaml 보충이 필요하다)"
         )
 
+    convention = d.get("action", {}).get("convention")
+    if convention not in ACTION_CONVENTIONS:
+        raise ValueError(
+            f"{path}: action.convention 이 {sorted(ACTION_CONVENTIONS)} 중 하나여야 한다 "
+            f"— 받은 값 {convention!r}. 선언하지 않으면 배포가 a=0 의 뜻을 짐작하게 된다."
+        )
+
     fab = d["asset"]["fabrics"]
+    raw_contract = d["contract"]
+    raw_checkpoint = raw_contract.get("checkpoint")
     contract = PolicyContract(
-        hdgp_package=d["contract"]["hdgp_package"],
-        obs_dim=int(d["contract"]["obs_dim"]),
-        action_dim=int(d["contract"]["action_dim"]),
+        hdgp_package=raw_contract["hdgp_package"],
+        obs_dim=int(raw_contract["obs_dim"]),
+        action_dim=int(raw_contract["action_dim"]),
+        source=raw_contract.get("source", "constants"),
+        checkpoint=_resolve(str(raw_checkpoint)) if raw_checkpoint else None,
     )
     _check_contract(contract)
 
@@ -264,6 +358,7 @@ def load_robot_profile(name_or_path: str | Path) -> RobotProfile:
         idle_arm_source=tuple(limits[j]["source"] for j in idle_arm),
         joint_limits=limits,
         tip_force_sign=float(d.get("tip_sensor", {}).get("force_sign", 1.0)),
+        action_convention=convention,
     )
 
 
@@ -470,6 +565,56 @@ def expected_q_home_arm(profile: RobotProfile) -> "list[float]":
         raise KeyError(f"{other}_ARM_REST_JOINT_POS 에 없는 관절: {missing}")
     sign = load_arm_mirror_sign(profile)
     return [float(sg) * float(rest[k]) for sg, k in zip(sign[:7], keys)]
+
+
+def _task_sources(profile: RobotProfile) -> list[Path]:
+    """자산 이름이 적힐 수 있는 그 태스크의 파일들.
+
+    DirectRL 태스크는 `grasp_{side}_env.py` 안에서 fabric 을 직접 만든다. manager-based
+    태스크는 env 파일 자체가 없고 `*_fabric_action.py` 가 만들며 이름은 preset 상수로
+    간접 참조한다. 한 형태만 보면 다른 형태에서는 **검사가 조용히 사라진다** — 그리고
+    사라진 검사는 통과처럼 보인다.
+    """
+    task = hdgp_task_dir(profile)
+    if not task.is_dir():
+        return []
+    named = [task / f"grasp_{profile.acting_side}_env.py"]
+    named += sorted(task.glob("*_fabric_action.py"))
+    named += sorted(task.glob("grasp_*_preset.py"))
+    return [path for path in named if path.is_file()]
+
+
+def _literal_and_constant_names(profile: RobotProfile, keys: tuple[str, ...]) -> set[str]:
+    """소스에서 `key="값"` 리터럴을 모으고, `P.CONST` 참조는 preset 값으로 푼다."""
+    found: set[str] = set()
+    sources = _task_sources(profile)
+    text = "\n".join(path.read_text() for path in sources)
+    for key in keys:
+        found |= set(re.findall(rf'{key}\s*=\s*"([^"]+)"', text))
+        for const in re.findall(rf"{key}\s*=\s*(?:P|preset)\.([A-Z_][A-Z0-9_]*)", text):
+            value = _preset_constant(profile, const)
+            if value is not None:
+                found.add(value)
+    return found
+
+
+def _preset_constant(profile: RobotProfile, name: str):
+    for path in hdgp_task_dir(profile).glob("grasp_*_preset.py"):
+        match = re.search(rf'^{name}\s*=\s*"([^"]+)"', path.read_text(), re.M)
+        if match:
+            return match.group(1)
+    return None
+
+
+def sim_fabrics_assets(profile: RobotProfile) -> set[str]:
+    """sim 이 이 태스크에서 쓰는 fabric 로봇 디렉토리 이름들."""
+    return _literal_and_constant_names(profile, ("robot_dir_name", "robot_name"))
+
+
+def sim_fabrics_worlds(profile: RobotProfile) -> set[str]:
+    """sim 이 이 태스크에서 쓰는 fabric world 이름들."""
+    return _literal_and_constant_names(profile, ("world_filename",))
+
 
 
 def available_profiles() -> list[str]:
