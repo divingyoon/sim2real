@@ -119,9 +119,16 @@ def report_sim(sim, lines):
     for i, name in enumerate(joints):
         c = vel[:, i]
         lines.append(f"  {name:10s} {c.mean():12.3f} {np.percentile(c,95):8.3f} {c.max():8.3f}")
-    cmd_step = sim["cmd_step_norm"][:, 0] * 1000.0
-    lines.append(f"  palm 지령 이동량  mean {cmd_step.mean():.2f}  p95 "
-                 f"{np.percentile(cmd_step,95):.2f}  max {cmd_step.max():.2f} mm/step")
+    # ★palm 지령 이동량은 **기록에서 직접 유도**한다. 액션 항의 `cmd_step_norm` 은
+    #   변화율 리미터가 꺼지면 갱신되지 않아 **정확히 0** 이 되는데, 그걸 그대로 실으면
+    #   "지령이 전혀 안 움직인다"는 측정값처럼 읽힌다. 죽은 채널은 값이 아니다.
+    step_mm = np.linalg.norm(np.diff(palm_cmd, axis=0), axis=-1) * 1000.0
+    lines.append(f"  palm 지령 이동량  mean {step_mm.mean():.2f}  p95 "
+                 f"{np.percentile(step_mm, 95):.2f}  max {step_mm.max():.2f} mm/step  (기록에서 유도)")
+    counter = sim["cmd_step_norm"][:, 0]
+    if not np.any(counter):
+        lines.append("  ⚠ env 의 cmd_step_norm 은 전 구간 0 이다 — 리미터가 꺼져 갱신되지 "
+                     "않는 죽은 채널이므로 쓰지 않는다.")
     if "droop" in sim:
         droop = np.abs(sim["droop"][:, 0]) * 1000.0
         lines.append("")
@@ -133,7 +140,19 @@ def report_sim(sim, lines):
 
 
 def report_real(sim, real, joints, lines, max_lag):
-    dt = float(sim["meta_step_dt"][0])
+    # ★재생은 `--rate-scale` 로 느리게 돌 수 있다. 기록의 step_dt 를 그대로 쓰면 지연이
+    #   그 배수만큼 틀린 ms 로 나온다. csv 가 자기 발행주기를 담고 있으면 그것을 쓴다.
+    if "publish_dt" in real and np.isfinite(real["publish_dt"]).all():
+        dt = float(np.median(real["publish_dt"]))
+        scale = float(sim["meta_step_dt"][0]) / dt
+        lines.append("")
+        lines.append(f"재생 발행주기 {dt*1000:.2f} ms (기록 {float(sim['meta_step_dt'][0])*1000:.2f} ms "
+                     f"· rate-scale {scale:.2f})")
+    else:
+        dt = float(sim["meta_step_dt"][0])
+        lines.append("")
+        lines.append("⚠ csv 에 publish_dt 가 없다 — 기록 step_dt 로 대신한다. "
+                     "느리게 재생했다면 아래 지연 ms 는 그 배수만큼 작게 나온다.")
     idx = real["step_idx"].astype(int)
     keep = (idx >= 0) & (idx < sim["arm_target"].shape[0])
     idx = idx[keep]

@@ -55,6 +55,19 @@ ABORT_EFFORT_NM = {"l_aj_5": 5.0, "l_aj_6": 5.0, "l_aj_7": 5.0}
 ABORT_STATE_STALE_SEC = 1.0
 
 
+def tracking_offenders(measured, setpoint, names, tolerance):
+    """**보낸 세트포인트** 대비 `tolerance` 를 넘은 관절 [(이름, 오차)].
+
+    기록 target 이 아니라 세트포인트와 대는 이유: 우리가 `--max-vel` 로 일부러 붙잡은
+    몫까지 팔 탓으로 세면, 리미터를 낮게 잡았다는 이유로 멀쩡한 팔에서 중단이 걸린다.
+    "우리가 붙잡은 몫"은 `describe` 가 발행 전에, 리포트가 사후에 따로 보여 준다.
+    """
+    measured = np.asarray(measured, dtype=float).reshape(-1)
+    setpoint = np.asarray(setpoint, dtype=float).reshape(-1)
+    error = np.abs(measured - setpoint)
+    return [(names[i], float(error[i])) for i in np.flatnonzero(error > tolerance)]
+
+
 def idle_arm_offenders(measured, rest, names, tolerance):
     """rest 에서 `tolerance` 를 넘은 유휴 팔 관절 목록 [(이름, 실측, 기대)].
 
@@ -96,7 +109,7 @@ def build_plan(sim_npz: Path, rate_scale: float, profile) -> ReplayPlan:
     )
 
 
-def describe(plan: ReplayPlan, profile) -> str:
+def describe(plan: ReplayPlan, profile, max_vel: float | None = None) -> str:
     """재생 **전에** 알아야 할 것: 얼마나 걸리고, 실기 한계 대비 무엇을 요구하는가."""
     lines = [
         f"프레임 {plan.n_frames}  ·  발행주기 {plan.publish_dt*1000:.2f} ms "
@@ -114,6 +127,13 @@ def describe(plan: ReplayPlan, profile) -> str:
     if plan.peak_joint_speed > limit:
         lines.append(f"  ⚠ 요구가 한계를 넘는다 — --rate-scale 을 "
                      f"{limit/plan.peak_joint_speed:.2f} 이하로 낮출 것")
+    if max_vel is not None and plan.peak_joint_speed > max_vel:
+        lines.append(
+            f"  ⚠ 세트포인트 상한(--max-vel {max_vel:g})이 요구 "
+            f"{plan.peak_joint_speed:.3f} 보다 낮다 — 세트포인트가 기록보다 **뒤처진다**.\n"
+            f"    팔 탓이 아니라 우리가 붙잡는 것이다. 의도한 것이면 그대로 두고,"
+            f" 아니면 --max-vel 을 {plan.peak_joint_speed:.2f} 이상으로."
+        )
     return "\n".join(lines)
 
 
@@ -147,7 +167,7 @@ def main() -> int:
         )
 
     print(f"구성 {profile.name}  ·  기록 {args.sim.name}")
-    print(describe(plan, profile))
+    print(describe(plan, profile, max_vel=args.max_vel))
     if not args.execute:
         print("\nDRY RUN: 아무것도 발행하지 않았다. 실제로 내보내려면 --execute 를 붙일 것.")
         return 0
@@ -188,6 +208,7 @@ def main() -> int:
             self.cursor = 0
             self.rows: list[dict] = []
             self.aborted: str | None = None
+            self._warned_behind = False
             self.timer = None
 
         def _state_cb(self, msg: JointState) -> None:
@@ -255,11 +276,19 @@ def main() -> int:
                 f"  --allow-idle-arm-mismatch 로 진행할 것."
             )
 
-        def _abort(self, why: str) -> None:
+        def _stop(self, why: str) -> None:
             self.aborted = why
-            self.get_logger().error(f"중단: {why}")
             if self.timer is not None:
                 self.timer.cancel()
+
+        def _finish(self, why: str) -> None:
+            """정상 종료. 중단과 같은 경로로 찍으면 완주가 실패처럼 보인다."""
+            self.get_logger().info(f"재생 {why}")
+            self._stop(why)
+
+        def _abort(self, why: str) -> None:
+            self.get_logger().error(f"중단: {why}")
+            self._stop(why)
 
         def _tick(self) -> None:
             now = time.monotonic()
@@ -274,16 +303,24 @@ def main() -> int:
             else:
                 frame = self.cursor - len(self.ramp)
                 if frame >= self.plan.n_frames:
-                    self.get_logger().info("재생 완료")
-                    return self._abort("완료")
+                    return self._finish("완료")
                 target = self.plan.arm_target[frame]
                 grip = float(self.plan.grip_target[frame])
                 step_idx = frame
 
-            err = np.abs(self.measured - target)
-            if err.max() > ABORT_TRACKING_ERR_RAD:
-                worst = self.plan.joint_names[int(np.argmax(err))]
-                return self._abort(f"{worst} 추종오차 {err.max():.3f} rad")
+            # ★기록 target 이 아니라 **직전에 보낸 세트포인트** 대비로 판정한다.
+            offenders = tracking_offenders(
+                self.measured, self.setpoint, self.plan.joint_names,
+                ABORT_TRACKING_ERR_RAD)
+            if offenders:
+                name, error = max(offenders, key=lambda item: item[1])
+                return self._abort(f"{name} 이 보낸 세트포인트를 {error:.3f} rad 뒤처진다")
+            behind = float(np.max(np.abs(self.setpoint - target)))
+            if behind > ABORT_TRACKING_ERR_RAD and not self._warned_behind:
+                self._warned_behind = True
+                self.get_logger().warning(
+                    f"세트포인트가 기록보다 {behind:.3f} rad 뒤처진다 — --max-vel "
+                    f"{args.max_vel:g} 가 붙잡고 있다(팔 탓이 아니다).")
             for k, name in enumerate(self.plan.joint_names):
                 cap = ABORT_EFFORT_NM.get(name)
                 if cap is not None and abs(self.effort[k]) > cap:
@@ -294,6 +331,9 @@ def main() -> int:
             self._publish(self.setpoint, grip)
             self.rows.append({
                 "t_send": now, "step_idx": step_idx,
+                # ★리포트가 배속을 스스로 알아야 한다. 없으면 기록의 step_dt 를 쓰게 되고
+                #   지연·지터가 rate_scale 배만큼 틀린 값으로 나온다(08.25 에 4배 틀렸다).
+                "publish_dt": self.plan.publish_dt,
                 **{f"cmd_{n}": float(self.setpoint[k])
                    for k, n in enumerate(self.plan.joint_names)},
                 **{f"meas_{n}": float(self.measured[k])
@@ -341,7 +381,10 @@ def main() -> int:
                 writer.writerows(node.rows)
             print(f"-> {args.log}  ({len(node.rows)} 행)")
         node.destroy_node()
-        rclpy.shutdown()
+        # Ctrl-C 는 rclpy 가 컨텍스트를 이미 내린 뒤에 여기로 온다 — 두 번 내리면
+        # RCLError 가 나고, 그게 종료 코드를 오염시켜 "실패"처럼 보인다.
+        if rclpy.ok():
+            rclpy.shutdown()
     print(f"종료: {node.aborted}")
     return 0 if node.aborted == "완료" else 1
 

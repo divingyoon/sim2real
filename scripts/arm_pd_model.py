@@ -98,6 +98,39 @@ class MockArm:
             raise ValueError("pd 모델은 kp/kd/fc/inertia 가 모두 필요하다")
         if substeps < 1:
             raise ValueError("substeps 는 1 이상")
+        if model == "pd":
+            # ★★세트포인트는 실제 위치에서 `max_vel·dt` 만큼만 앞선다. 쿨롱 마찰은
+            #   `kp·err > fc` 여야 풀린다. 그러니 선행량이 `fc/kp` 를 못 넘으면 스프링이
+            #   마찰을 이길 수 없고 **그 관절은 영원히 정지한다** — cmd 가 아무리 멀어져도
+            #   그렇다. 그리고 그 결과는 오류가 아니라 "추종 실패"라는 그럴듯한 숫자로
+            #   나온다(08.25 에 200 Hz 리그에서 손목 3관절이 얼어붙은 것을 실기 능력
+            #   부족으로 읽을 뻔했다). 세 값의 결합이라 어느 하나만 봐서는 안 보인다.
+            #   조건 유도(정지 상태 qd=0 에서 한 substep):
+            #       qd_free = (kp·err/I)·dt_s / (1 + (kd/I)·dt_s)
+            #       마찰이 제거하는 양 = (fc/I)·dt_s
+            #     움직이려면 qd_free > (fc/I)·dt_s
+            #       ⟺ err > (fc/kp)·(1 + (kd/I)·dt_s),   dt_s = dt/substeps
+            #   ★맨 뒤 괄호가 핵심이다. 순진한 `fc/kp` 만 보면 통과하는데 실제로는
+            #     정지하는 구간이 있다(60 Hz·substeps 4: 요구 0.107 vs 선행량 0.033).
+            #     암시적 감쇠가 한 substep 의 속도를 그만큼 눌러서 마찰이 이긴다.
+            #     그래서 substeps 를 줄이면 조용히 얼어붙는다 — 7개 조건 실측으로 확인.
+            leash = float(max_vel) * float(dt)
+            sub_dt = float(dt) / int(substeps)
+            kp_a = np.asarray(kp, dtype=np.float64)
+            kd_a = np.asarray(kd, dtype=np.float64)
+            fc_a = np.asarray(fc, dtype=np.float64)
+            inertia_a = np.asarray(inertia, dtype=np.float64)
+            required = (fc_a / kp_a) * (1.0 + (kd_a / inertia_a) * sub_dt)
+            stuck = np.flatnonzero(leash <= required)
+            if stuck.size:
+                raise ValueError(
+                    f"세트포인트 선행량 {leash:.5f} rad 이 마찰을 못 이긴다 — "
+                    f"관절 {stuck.tolist()} 은 구조적으로 움직이지 못한다.\n"
+                    f"  요구 (fc/kp)·(1+(kd/I)·dt/substeps) = "
+                    f"{np.round(required[stuck], 5).tolist()}\n"
+                    f"  max_vel 을 올리거나 substeps 를 늘릴 것(dt 를 줄이면 오히려 나빠진다).\n"
+                    f"  이 상태로 돌리면 모델이 만들어낸 정지를 실기 추종 실패로 읽게 된다."
+                )
         self.q = np.asarray(q0, dtype=np.float64).copy()
         self.qd = np.zeros_like(self.q)
         self.model = model

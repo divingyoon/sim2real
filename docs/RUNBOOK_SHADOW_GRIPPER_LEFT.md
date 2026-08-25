@@ -89,6 +89,36 @@ python3 scripts/shadow_replay.py --sim logs/shadow/sim_fab_test16_gcON.npz \
 `--execute` 가 없으므로 **아무것도 발행하지 않는다**(rclpy import 자체가 그 뒤에 있다).
 출력의 "요구 최대 관절속도"가 프로필 한계 아래인지 본다. 1.0 은 거부되고 **0.5 가 상한**이다.
 
+## 2-1. 루프백 리그로 전 사슬 예행 (로봇·벤더 스택 불필요)
+
+`openarm_bringup` 이 빌드되지 않은 머신에서도 **ROS 경로 전체**를 돌릴 수 있다.
+`fake_arm_bridge.py` 가 컨트롤러 자리에 서서 궤적을 받아 팔 모델로 적분하고
+`/joint_states` 를 낸다. 08.25 에 로컬 5090 에서 1200 프레임 완주를 확인했다.
+
+```bash
+export ROS_DOMAIN_ID=77
+# 터미널 A
+python3 scripts/fake_arm_bridge.py --robot gripper_left --model pd
+# 터미널 B
+python3 scripts/shadow_replay.py --sim logs/shadow/sim_fab_test16_gcON.npz \
+    --robot gripper_left --rate-scale 0.25 --max-vel 1.2 \
+    --log logs/shadow/fake_x025.csv --execute
+# 터미널 C (재생 후)
+python3 scripts/shadow_report.py --sim logs/shadow/sim_fab_test16_gcON.npz \
+    --real logs/shadow/fake_x025.csv
+```
+
+⚠ **모델이지 로봇이 아니다.** 게인은 **우팔** 식별값이고(좌팔 실측 캘리브는 없다),
+중력이 모델에 없으며 `effort` 는 0 이라 **effort 중단 조건이 한 번도 발화하지 않는다.**
+여기 숫자를 실측으로 인용하지 말 것 — 확인하는 것은 **배선·순서·게이트·정렬**이다.
+
+여기서 잡힌 것들(전부 실기 전에 잡혔다):
+- `--max-vel` 이 요구보다 낮으면 세트포인트가 구조적으로 뒤처진다 → 발행 전 경고
+- 중단 판정이 **보낸 세트포인트** 대비여야 한다(기록 target 대비면 우리 리미터가
+  붙잡은 몫까지 팔 탓으로 세어 멀쩡한 팔에서 중단이 걸린다)
+- 리포트가 `--rate-scale` 을 모르면 지연 ms 가 그 배수만큼 틀린다 → csv 가 발행주기를 담는다
+- env 의 `cmd_step_norm` 은 리미터가 꺼지면 **정확히 0** 인 죽은 채널 → 기록에서 유도
+
 ## 3. fake_hardware 통과 (배선·순서·차원)
 
 ```bash

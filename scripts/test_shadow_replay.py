@@ -192,3 +192,51 @@ def test_a_small_idle_arm_deviation_is_tolerated():
 
     assert idle_arm_offenders(drooped, rest, [f"r_aj_{i}" for i in range(1, 8)],
                               IDLE_ARM_MISMATCH_RAD) == []
+
+
+def test_the_abort_asks_whether_the_arm_followed_what_we_sent(tmp_path, profile):
+    """중단은 **보낸 것** 대비로 판정해야 한다.
+
+    두 뒤처짐이 겹친다:
+      ① 세트포인트가 기록 target 을 못 따라감 — **우리 리미터**(`--max-vel`)가 붙잡은 것
+      ② 실측이 세트포인트를 못 따라감       — **팔**이 못 따라간 것
+    ①은 계획 문제이고 ②는 안전 문제다. 뭉뚱그려 재면 리미터를 낮게 잡았다는 이유로
+    멀쩡한 팔에서 중단이 걸린다(08.25 에 실제로 그렇게 걸렸다 — l_aj_2 에서 ① 0.092 +
+    ② 0.118 이 합쳐져 0.21 로 읽혔다).
+    """
+    from shadow_replay import tracking_offenders
+
+    names = ["l_aj_1", "l_aj_2"]
+    setpoint = np.array([0.0, -0.30])
+    measured = np.array([0.0, -0.29])          # 보낸 것은 잘 따라가는 중
+    target = np.array([0.0, -0.50])            # 기록은 훨씬 앞서 있다(리미터가 붙잡음)
+
+    assert tracking_offenders(measured, setpoint, names, 0.30) == []
+
+    stalled = np.array([0.0, 0.0])             # 보낸 것도 못 따라감
+    offenders = tracking_offenders(stalled, setpoint, names, 0.20)
+
+    assert [n for n, _ in offenders] == ["l_aj_2"], offenders
+
+
+def test_the_plan_checks_the_setpoint_cap_against_its_own_demand(tmp_path, profile):
+    """리미터가 요구보다 낮으면 세트포인트가 구조적으로 뒤처진다 — 발행 전에 알아야 한다."""
+    from shadow_replay import describe
+
+    path = tmp_path / "demand.npz"
+    joints = [f"l_aj_{i}" for i in range(1, 8)]
+    target = np.zeros((10, 1, 7), dtype=np.float32)
+    target[:, 0, 1] = np.linspace(0.0, 0.5, 10)          # 60 Hz 로 3.0 rad/s
+    np.savez_compressed(
+        path, arm_target=target, grip_cmd=np.zeros((10, 1, 2), dtype=np.float32),
+        meta_joint_names=np.array(joints),
+        meta_grip_names=np.array(["l_hj_gripper_1", "l_hj_gripper_2"]),
+        meta_step_dt=np.array([1 / 60]),
+    )
+    plan = build_plan(path, rate_scale=0.25, profile=profile)   # 요구 0.75 rad/s
+
+    tight = describe(plan, profile, max_vel=0.5)
+    loose = describe(plan, profile, max_vel=2.0)
+
+    assert "세트포인트 상한" in tight and "뒤처진다" in tight
+    assert "뒤처진다" not in loose
