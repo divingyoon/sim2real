@@ -83,6 +83,20 @@ def load_real(path: Path) -> dict[str, np.ndarray]:
     return {k: np.asarray(v) for k, v in out.items()}
 
 
+def _arm_gains(sim) -> str:
+    """기록이 적어 둔 팔 게인. **하드코딩 금지** — 게인은 태스크마다 바뀐다.
+
+    좌 그리퍼 트랙은 실기 effort 한계(j5~j7 = 7 N·m)에 맞춰 kp 80 / kd 4 로 낮춰 두었다.
+    우팔(유휴)만 kp 400 이다. 보고서가 400 이라고 적으면 추종오차를 **완전히 반대로**
+    읽게 된다 — "강성이 높은데도 이만큼 틀어졌다"가 "강성이 낮으니 당연하다"가 된다.
+    """
+    kp = sim.get("meta_arm_stiffness")
+    kd = sim.get("meta_arm_damping")
+    if kp is None or kd is None:
+        return "게인 미상 — 기록에 meta_arm_stiffness/damping 이 없다"
+    return f"kp {float(np.asarray(kp).reshape(-1)[0]):.0f} / kd {float(np.asarray(kd).reshape(-1)[0]):.0f}"
+
+
 def report_sim(sim, lines):
     palm_cmd = sim["palm_cmd_pos"][:, 0]
     palm_fk = sim["palm_fk_pos"][:, 0]
@@ -94,7 +108,9 @@ def report_sim(sim, lines):
     track = np.abs(sim["arm_meas"][:, 0] - sim["arm_target"][:, 0])
 
     lines.append(f"스텝 {sim['action'].shape[0]}  ·  step_dt {float(sim['meta_step_dt'][0]):.4f} s  "
-                 f"·  중력보상 {str(sim['meta_gravity_comp'][0])}")
+                 f"·  중력보상 {str(sim['meta_gravity_comp'][0])}"
+                 + ("" if "meta_gravity_comp_requested" in sim
+                    else "  ⚠(구 기록: **요청값**이라 실제와 다를 수 있다)"))
     lines.append(f"fabrics_sim {str(sim['meta_fabrics'][0])}")
     lines.append("")
     lines.append("## L1 — Fabrics attractor 가 지령을 실현하나 (FK(fabric_q) vs palm 지령)")
@@ -106,7 +122,7 @@ def report_sim(sim, lines):
     s = stats(l2)
     lines.append(f"  위치 mean {s['mean']:7.2f}  p95 {s['p95']:7.2f}  max {s['max']:7.2f}  mm")
     lines.append("")
-    lines.append("## sim 관절 추종오차 (kp 400 — 실기 대비 기준선)")
+    lines.append(f"## sim 관절 추종오차 ({_arm_gains(sim)} — 실기 대비 기준선)")
     lines.append(f"  {'관절':10s} {'mean[mrad]':>11s} {'p95':>8s} {'max':>8s}")
     for i, name in enumerate(joints):
         c = track[:, i] * 1000.0
@@ -132,7 +148,7 @@ def report_sim(sim, lines):
     if "droop" in sim:
         droop = np.abs(sim["droop"][:, 0]) * 1000.0
         lines.append("")
-        lines.append("## 중력 처짐 보상분 (★sim 강성 400 기준으로 상한이 잡혀 있다)")
+        lines.append(f"## 중력 처짐 보상분 (★sim {_arm_gains(sim)} 기준으로 상한이 잡혀 있다)")
         lines.append(f"  {'관절':10s} {'mean[mrad]':>11s} {'max':>8s}")
         for i, name in enumerate(joints):
             lines.append(f"  {name:10s} {droop[:, i].mean():11.2f} {droop[:, i].max():8.2f}")

@@ -161,8 +161,46 @@ def test_an_unknown_velocity_limit_says_unknown_rather_than_passing():
     assert max_safe_rate_scale(plan, profile) is None
 
 
-def test_a_multi_env_recording_is_refused_with_a_way_out():
-    npz = _npz(np.zeros((3, 2)), _grip(3))
-    npz["arm_target"] = np.zeros((3, 4, 2))
-    with pytest.raises(ValueError, match="num_envs 1"):
-        build_plan(npz, profile_joints=PROFILE, arm_group=ARM, grip_group=GRIP)
+def _multi(n_env: int = 4, n: int = 3) -> dict:
+    """env 마다 값이 다른 기록 — 고르기가 평균이 아님을 확인할 수 있게."""
+    npz = _npz(np.zeros((n, 2)), _grip(n))
+    arm = np.zeros((n, n_env, 2), dtype=np.float32)
+    grip = np.zeros((n, n_env, 2), dtype=np.float32)
+    for e in range(n_env):
+        arm[:, e, :] = 0.1 * e
+        grip[:, e, :] = 0.01 * e
+    npz["arm_target"] = arm
+    npz["grip_cmd"] = grip
+    for k in ("action", "palm_cmd_pos", "palm_cmd_quat_wxyz"):
+        npz[k] = np.repeat(npz[k][:, None, :], n_env, axis=1)
+    return npz
+
+
+def test_a_multi_env_recording_without_a_chosen_env_is_refused():
+    with pytest.raises(ValueError, match="env_index"):
+        build_plan(_multi(), profile_joints=PROFILE, arm_group=ARM, grip_group=GRIP)
+
+
+def test_the_refusal_says_it_will_not_average():
+    with pytest.raises(ValueError, match="평균"):
+        build_plan(_multi(), profile_joints=PROFILE, arm_group=ARM, grip_group=GRIP)
+
+
+def test_choosing_an_env_takes_that_envs_trajectory_not_a_blend():
+    plan = build_plan(_multi(), profile_joints=PROFILE, arm_group=ARM,
+                      grip_group=GRIP, env_index=2)
+    # env 2 의 값은 0.2 다. 평균(0.15)도, env 0(0.0)도 아니어야 한다.
+    assert plan.arm.positions[0, 0] == pytest.approx(0.2)
+    assert plan.grip.positions[0, 0] == pytest.approx(0.02)
+
+
+def test_an_env_index_outside_the_recording_is_refused():
+    with pytest.raises(IndexError, match="env_index"):
+        build_plan(_multi(n_env=4), profile_joints=PROFILE, arm_group=ARM,
+                   grip_group=GRIP, env_index=9)
+
+
+def test_the_chosen_env_is_recorded_in_the_plans_meta():
+    plan = build_plan(_multi(), profile_joints=PROFILE, arm_group=ARM,
+                      grip_group=GRIP, env_index=1)
+    assert plan.meta["env_index"] == 1

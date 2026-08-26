@@ -105,19 +105,32 @@ def load_npz(path: str | Path) -> dict:
     return {k: data[k] for k in data.files}
 
 
-def _squeeze_env(a: np.ndarray) -> np.ndarray:
-    """(N, 1, D) → (N, D). 기록은 env 축을 갖고 있고 여기선 env 1개만 쓴다."""
+def _squeeze_env(a: np.ndarray, env_index: int | None = None) -> np.ndarray:
+    """(N, E, D) → (N, D). E>1 이면 **어느 env 인지 명시**해야 한다.
+
+    ★`--num_envs 1` 을 요구하지 않는다. 좌 그리퍼 fabric 은 batch 1 에서 cspace metric 이
+      특이해져 첫 스텝에 죽는다(실측: n=1 죽고 n=16 통과). 단일 env 기록이 애초에 불가능한
+      구성이 있으므로, 여러 env 를 기록하고 **하나를 골라** 쓴다.
+    ⚠ 고르는 것이지 **평균 내는 것이 아니다.** env 마다 컵 위치가 다르고 궤적도 다르다.
+      평균 궤적은 어느 env 도 실제로 지나간 적 없는 경로이고, 그걸 로봇에 보내면
+      "정책이 낸 궤적"이 아닌 것을 재생하게 된다.
+    """
     a = np.asarray(a)
-    if a.ndim == 3:
-        if a.shape[1] != 1:
-            raise ValueError(
-                f"env 가 {a.shape[1]} 개다 — 이 변환은 단일 env 기록만 받는다. "
-                "--num_envs 1 로 다시 기록하라."
-            )
-        return a[:, 0, :]
     if a.ndim == 2:
         return a
-    raise ValueError(f"기대한 차원이 아니다: shape={a.shape}")
+    if a.ndim != 3:
+        raise ValueError(f"기대한 차원이 아니다: shape={a.shape}")
+    n_env = a.shape[1]
+    if env_index is None:
+        if n_env != 1:
+            raise ValueError(
+                f"env 가 {n_env} 개다 — 어느 env 를 재생할지 정해야 한다(env_index). "
+                "평균을 내지 않는다: 평균 궤적은 어느 env 도 지나간 적 없는 경로다."
+            )
+        return a[:, 0, :]
+    if not 0 <= env_index < n_env:
+        raise IndexError(f"env_index {env_index} 가 기록의 env 수 {n_env} 밖이다")
+    return a[:, env_index, :]
 
 
 def _require_finite(a: np.ndarray, what: str) -> None:
@@ -137,13 +150,14 @@ def build_group(
     group_canonical: list[str],
     profile_joints: dict[str, dict],
     mimic_tol: float = MIMIC_TOLERANCE_M,
+    env_index: int | None = None,
 ) -> GroupChannels:
     """sim 채널 → 한 컨트롤러 그룹의 source 위치 (부호·clamp 적용).
 
     `group_canonical` 에 없는 sim 채널은 mimic 형제로 보고 버리되, 버리기 전에
     그룹의 첫 관절과 `mimic_tol` 안에서 일치하는지 확인한다.
     """
-    values = _squeeze_env(values)
+    values = _squeeze_env(values, env_index)
     _require_finite(values, "관절 지령")
     if values.shape[1] != len(sim_canonical):
         raise ValueError(
@@ -200,6 +214,7 @@ def build_plan(
     arm_group: list[str],
     grip_group: list[str],
     rate_scale: float = 1.0,
+    env_index: int | None = None,
 ) -> BagPlan:
     """기록 + 프로필 → 재생 계획. `rate_scale` 은 (0, 1] 로 **시간을 늘린다**."""
     if not 0.0 < rate_scale <= 1.0:
@@ -210,19 +225,21 @@ def build_plan(
         sim_canonical=[str(x) for x in npz["meta_joint_names"]],
         group_canonical=arm_group,
         profile_joints=profile_joints,
+        env_index=env_index,
     )
     grip = build_group(
         values=npz["grip_cmd"],
         sim_canonical=[str(x) for x in npz["meta_grip_names"]],
         group_canonical=grip_group,
         profile_joints=profile_joints,
+        env_index=env_index,
     )
     if arm.positions.shape[0] != grip.positions.shape[0]:
         raise ValueError("팔과 그리퍼 프레임 수가 다르다")
 
-    action = _squeeze_env(npz["action"])
-    palm_pos = _squeeze_env(npz["palm_cmd_pos"])
-    palm_quat = _squeeze_env(npz["palm_cmd_quat_wxyz"])
+    action = _squeeze_env(npz["action"], env_index)
+    palm_pos = _squeeze_env(npz["palm_cmd_pos"], env_index)
+    palm_quat = _squeeze_env(npz["palm_cmd_quat_wxyz"], env_index)
     for a, what in ((action, "action"), (palm_pos, "palm_cmd_pos"),
                     (palm_quat, "palm_cmd_quat_wxyz")):
         _require_finite(a, what)
@@ -236,6 +253,7 @@ def build_plan(
 
     meta = {k: np.asarray(v).reshape(-1).tolist()
             for k, v in npz.items() if k.startswith("meta_")}
+    meta["env_index"] = env_index
     return BagPlan(
         arm=arm, grip=grip, action=action, palm_pos=palm_pos,
         palm_quat_wxyz=palm_quat, t_ns=t_ns, publish_dt=publish_dt,

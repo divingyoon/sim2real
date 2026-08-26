@@ -54,6 +54,7 @@ def _plan_from_args(args) -> tuple[BagPlan, object]:
         arm_group=list(profile.arm_canonical),
         grip_group=list(profile.ee_canonical),
         rate_scale=args.rate_scale,
+        env_index=args.env_index,
     )
     return plan, profile
 
@@ -66,6 +67,7 @@ def describe(plan: BagPlan, profile) -> str:
         f"프레임 {plan.n_frames} · 발행 {plan.publish_dt*1000:.1f} ms "
         f"({1/plan.publish_dt:.1f} Hz) · 길이 {plan.duration_sec:.1f} s "
         f"· rate_scale {plan.rate_scale:.2f}",
+        f"env  {plan.meta.get('env_index')}" if plan.meta.get("env_index") is not None else "env  단일",
         f"팔   {list(plan.arm.source_names)}",
         f"그리퍼 {list(plan.grip.source_names)}"
         + (f"  (mimic 로 버림: {list(plan.grip.dropped)})" if plan.grip.dropped else ""),
@@ -213,6 +215,9 @@ def main() -> int:
     ap.add_argument("npz", type=Path, help="probe_fab_shadow_record.py 산출물")
     ap.add_argument("--robot", default="gripper_left", help="config/robots 구성 프로필")
     ap.add_argument("--out", type=Path, help="백 디렉터리. 없으면 판정만 출력")
+    ap.add_argument("--env-index", type=int, default=None,
+                    help="여러 env 를 기록했을 때 **어느 env** 를 재생할지. 평균을 내지 않는다 "
+                         "— 평균 궤적은 어느 env 도 지나간 적 없는 경로다.")
     ap.add_argument("--rate-scale", type=float, default=1.0,
                     help="(0,1] 시간을 늘려 요구속도를 낮춘다. 경로는 안 변한다")
     ap.add_argument("--force", action="store_true",
