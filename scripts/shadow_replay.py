@@ -84,8 +84,13 @@ def idle_arm_offenders(measured, rest, names, tolerance):
     ]
 
 
-def build_plan(sim_npz: Path, rate_scale: float, profile) -> ReplayPlan:
-    data = np.load(sim_npz, allow_pickle=False)
+def build_plan(source: Path | dict, rate_scale: float, profile) -> ReplayPlan:
+    """npz 경로 또는 이미 읽힌 기록 dict(백 되읽기 결과)를 받는다.
+
+    백은 드라이버 계약(source 관절)으로 적혀 있지만 `action_bag_read.read_bag` 이
+    canonical 로 되돌려 주므로, 여기서는 출처를 구분할 필요가 없다.
+    """
+    data = source if isinstance(source, dict) else np.load(source, allow_pickle=False)
     joint_names = [str(x) for x in data["meta_joint_names"]]
     if tuple(joint_names) != tuple(profile.arm_canonical):
         raise SystemExit(
@@ -140,7 +145,11 @@ def describe(plan: ReplayPlan, profile, max_vel: float | None = None) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--sim", type=Path, required=True, help="probe_fab_shadow_record 의 npz")
+    src = parser.add_mutually_exclusive_group(required=True)
+    src.add_argument("--sim", type=Path, help="probe_fab_shadow_record 의 npz")
+    src.add_argument("--bag", type=Path,
+                     help="action_bag.py 가 구운 rosbag2. 백은 이미 감속(rate_scale)이 "
+                          "반영돼 있으므로 --rate-scale 을 또 곱하지 않는다.")
     parser.add_argument("--robot", default="gripper_left", help="config/robots 의 구성")
     parser.add_argument("--rate-scale", type=float, default=0.25,
                         help="(0,1]. 낮출수록 느리게 재생한다. 처음에는 0.25 로 시작할 것.")
@@ -157,7 +166,17 @@ def main() -> int:
     args = parser.parse_args()
 
     profile = load_robot_profile(args.robot)
-    plan = build_plan(args.sim, args.rate_scale, profile)
+    if args.bag is not None:
+        from action_bag_read import read_bag
+        # 백의 dt 는 이미 구울 때의 rate_scale 이 들어간 값이다. 여기서 또 곱하면
+        # 두 번 감속돼 "왜 이렇게 느리지"가 된다. 백은 1.0 으로 재생한다.
+        source, rate_scale, label = read_bag(args.bag, profile=profile), 1.0, args.bag.name
+        if args.rate_scale != parser.get_default("rate_scale"):
+            print(f"⚠ --bag 은 감속이 이미 반영돼 있다 — --rate-scale "
+                  f"{args.rate_scale} 무시하고 1.0 으로 재생한다.")
+    else:
+        source, rate_scale, label = args.sim, args.rate_scale, args.sim.name
+    plan = build_plan(source, rate_scale, profile)
     if args.frames > 0:
         plan = ReplayPlan(
             arm_target=plan.arm_target[: args.frames],
@@ -166,7 +185,7 @@ def main() -> int:
             joint_names=plan.joint_names, gripper_name=plan.gripper_name,
         )
 
-    print(f"구성 {profile.name}  ·  기록 {args.sim.name}")
+    print(f"구성 {profile.name}  ·  기록 {label}")
     print(describe(plan, profile, max_vel=args.max_vel))
     if not args.execute:
         print("\nDRY RUN: 아무것도 발행하지 않았다. 실제로 내보내려면 --execute 를 붙일 것.")

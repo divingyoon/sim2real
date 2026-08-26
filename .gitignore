@@ -12,3 +12,6 @@ vendor/openarm/openarm_teleop/
 
 # 배포 파이썬 환경(setup_deploy_env.sh 로 재생성)
 .venv/
+
+# 구운 rosbag2 (npz 에서 action_bag.py 로 언제든 재생성 — 커밋하지 않는다)
+logs/shadow/*.bag/

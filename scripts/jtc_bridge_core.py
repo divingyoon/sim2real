@@ -8,7 +8,10 @@
     source_pos[j] = clip( canonical_val[input_idx[j]] * sign[j], lower[j], upper[j] )
 
 ROS 노드(`isaacsim_cmd_to_jtc.py`)는 이 코어로 위치를 만들고 단일포인트 JointTrajectory
-(`time_from_start = k·dt > 0`, [[jtc-none-interpolation-silent-stall]])를 발행한다.
+를 **`time_from_start = 0`** 으로 발행한다 — 컨트롤러가 `interpolation_method: "none"`
+이라 미래 시각 포인트는 스트림에서 영영 적용되지 않고 로봇이 무경고로 멈춘다
+[[jtc-none-interpolation-silent-stall]]. 속도 제한은 시각이 아니라 `velocity_limited_target`
+의 위치 클램프로 건다.
 """
 
 from __future__ import annotations
