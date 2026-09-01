@@ -28,9 +28,11 @@ checkpoints:
     md5: "27219429"
     params: logs/policy/left_v2B25/params
   right:
-    path: logs/policy/right_d3/nn/d3_ep20000.pth
-    md5: "485d8abf"
-    params: logs/policy/right_d3/params
+    # ★사용자 지정 E1. 학습 중 스냅샷(ep14160)이라 E1 이 끝나면 다시 뜬다.
+    #   server 에서 가져올 때는 cp 로 스냅샷 뜬 뒤 md5 대조 — 학습이 파일을 덮어쓴다.
+    path: logs/policy/right_e1/nn/e1_best.pth
+    md5: "fc48c5cc"
+    params: logs/policy/right_e1/params
 
 stages:
   - id: preflight
@@ -106,10 +108,13 @@ stages:
     needs: [grasp_right]
     touches_real: true
     blocked: >-
-      전환 램프 궤적이 없다. pour 초기 pose 가 두 grasp 정책의 goal 분포 밖이다 —
-      받는 컵(좌) y −14.5 cm · 붓는 컵(우) x −11 cm. goal 지령만으로는 이송이
-      구조적으로 불가능하고, 리셋 궤적과 같은 방식으로 한 번 구워야 한다(로드맵 P4).
-    evidence: logs/shadow/pour_traj/README.md
+      ★09.01 sim 실측으로 판정이 갈렸다. 우팔은 전환이 필요 없다 — pour 는 warm 뱅크
+      상태로 텔레포트해 시작하므로(z boost 0) pour 의 t=0 이 곧 파지 종료 자세다.
+      막는 것은 짝이다: 현 pour 학습은 d3 뱅크인데 우팔 정책은 E1 이고, 둘의 파지
+      종료 자세가 j6 75.2° · j4 54.9° · palm 59.8 mm 다르다. E1 뱅크를 모아 pour 를
+      FRESH 재학습해야 한다. 좌팔은 반대로 진짜 이동이 필요하다 — pour 좌팔은 고정
+      자세(LEFT_ARM_REST_JOINT_POS)이고 파지 시작 자세에서만 봐도 L2 1.429 rad 멀다.
+    evidence: docs/HANDOFF_GRASP_TO_POUR_2026-09-01.md
 
   - id: pour
     title: 물붓기
@@ -119,7 +124,8 @@ stages:
       배포 가능한 pour 정책이 없다. RA-L both/pour_sensor 는 현 소스로 재생 불가
       (NUM_ACTIONS 드리프트), 재학습 b1_multicup1-r3 는 success 16.2%·spill 31.9%
       에서 멈췄다. 궤적 재생 노선도 peak 5.67 rad/s 로 실기 한계의 2.8배다(로드맵 P6).
-    evidence: docs/pour_sensor_deployment.md
+      ★그리고 현재 도는 학습(d3_layout1/2)은 d3 뱅크라 우팔 E1 과 짝이 맞지 않는다.
+    evidence: docs/HANDOFF_GRASP_TO_POUR_2026-09-01.md
 
   - id: place_right
     title: 우팔 컵 내려놓기
