@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "kind": "excitation_runs",
+  "profile": "openarm_tesollo",
+  "asset": {
+    "id": "openarm_tesollo_sensor_rl",
+    "manifest_sha256": "ef802c059f1c3e57c7e652a7333c8b29c29c289bb04460414ae6e58c287244dc"
+  },
+  "group": "openarm_right_arm",
+  "runs": [
+    {
+      "path": "right_R3_s0650.npz"
+    },
+    {
+      "path": "right_R3_s0651.npz"
+    },
+    {
+      "path": "right_R3_s0652.npz"
+    }
+  ],
+  "fit_runs": [
+    0,
+    1
+  ],
+  "holdout_runs": [
+    2
+  ]
+}
