@@ -11,19 +11,27 @@
 # ── T_base_cam: robot base ← camera_color_optical_frame ────────────────────
 # FoundationPose 출력 프레임 = 입력 컬러 이미지의 optical 프레임
 # (RealSense: camera_color_optical_frame, x우/y하/z전방).
-# 캘리브(2026-08-02, head 카메라 ChArUco): 7x5 DICT_6X6, square 0.030/marker 0.022.
-# 보드 CAD 고정 배치(base): 중앙 (0.420,-0.050,0.200), yaw=0, 긴변 +y, 인쇄면 위.
-# T_base_cam = T_base_board(CAD) ∘ inv(T_cam_board) — 카메라위치 가정/yaw역산 불필요.
-# 검출 24/24 corners, 재투영 0.274px. 교차검증: tilt 290 독립교정과 카메라위치 ~1cm 일치.
-# ★교정 목 자세(head_v1.yaml, unwrapped 인코더 deg): pan=-90 / tilt=280.
-#   이 extrinsics는 이 목 자세에서만 유효 — 배포 시 head_position_hold_node 로 동일 자세 재현.
-#   회전 운영엔 hand-eye(T_neck_cam)+목 엔코더/FK 필요(별도).
-#   재캘리브: 보드 CAD 위치 배치 + 목 pan=-90/tilt=280 고정 →
-#   find_head_tilt.py(또는 다중프레임 캡처) → charuco_calib.py → recompute_from_cad.py --write.
+# ★2026-09-01 갱신 — hand-eye 캘리브로 교체.
+#   구값(2026-08-02, 보드 CAD 고정, 1프레임 0.274px):
+#     position [0.0638473958, 0.0405343559, 0.827139699]
+#     orientation_wxyz [-0.137367707, 0.697932932, -0.688537236, 0.14119565]
+#   구값이 낡은 이유 셋: ⓐ목 모터를 교체해 인코더 영점이 다르다 ⓑ교정 자세
+#   (pan -90/tilt 280)가 지금 좌표계에 없다 ⓒ교정 방법이 다르다.
+#   기준 자세에서 신·구 차이 = 위치 15.5mm · 회전 4.19°(0.6m 컵에서 약 44mm).
+#
+# 신값 출처: config/head_extrinsics.yaml 의 T_neck_cam (hand-eye, 25프레임·553코너,
+#   RMS 재투영 1.214px, 조건수 5.45e2) 을 기준 자세로 합성:
+#     T_base_cam = T_base_neck(pan, tilt) ∘ T_neck_cam      (scripts/head_fk_chain.py)
+#
+# ★아래 값은 **목 자세 pan 0 / tilt -20 에서만** 유효한 정적 스냅샷이다.
+#   목을 돌리면 통째로 틀린다(pan 15° 면 카메라가 11mm 이동 + 큰 회전).
+#   목을 돌려 쓰려면 cup_pose_relay 의 --head-joint-topic 을 켠다 —
+#   그러면 이 블록 대신 목 각도로 매번 계산한다.
+#   자세 재현: scripts/head_home.py --execute
 camera:
   frame: camera_color_optical_frame
-  position: [0.0638473958, 0.0405343559, 0.827139699]
-  orientation_wxyz: [-0.137367707, 0.697932932, -0.688537236, 0.14119565]
+  position: [0.0674838252, 0.038116775, 0.841995575]
+  orientation_wxyz: [0.115742074, -0.690661053, 0.70416182, -0.117248508]
 
 # ── T_cad_body: 컵 CAD 메시 프레임 → sim body 프레임 ───────────────────────
 # FoundationPose에 넣는 CAD 메시의 원점/축이 sim의 컵 body 프레임과 다르면

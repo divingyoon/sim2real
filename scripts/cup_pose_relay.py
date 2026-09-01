@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -90,6 +90,30 @@ def load_extrinsics(path: str | Path) -> Extrinsics:
     )
 
 
+def extrinsics_at_head(ext: Extrinsics, pan_encoder_deg: float,
+                       tilt_encoder_deg: float) -> Extrinsics:
+    """목 각도에 맞는 `T_base_cam` 으로 **새 Extrinsics 를 만든다**(원본 불변).
+
+    yaml 의 `camera:` 블록은 한 목 자세의 정적 스냅샷이라 목이 돌면 통째로 틀린다
+    (pan 15° 면 카메라가 11 mm 이동 + 큰 회전 → 0.6 m 컵에서 수 cm). 여기서는
+    hand-eye `T_neck_cam` 과 URDF FK 로 자세마다 다시 만든다.
+
+    ★`cad_to_body` 는 건드리지 않는다 — 그건 목과 무관한 CAD↔body 정합이다.
+    """
+    from head_camera_pose import base_cam_pose
+
+    pos, quat = base_cam_pose(pan_encoder_deg, tilt_encoder_deg)
+    return replace(ext, cam_pos=pos, cam_quat=quat)
+
+
+def head_state_is_usable(last_stamp_s: float | None, now_s: float,
+                         max_age_s: float) -> bool:
+    """목 각도가 아직 쓸 만한가. **틀린 컵 좌표는 없느니만 못하다.**"""
+    if last_stamp_s is None:
+        return False
+    return (float(now_s) - float(last_stamp_s)) <= float(max_age_s)
+
+
 def cad_pose_to_base_body(
     ext: Extrinsics,
     cad_pos_cam: np.ndarray,
@@ -146,6 +170,12 @@ def main() -> None:
                         help="입력 메시지 타입: Isaac ROS FP=detection3d, FP++=posestamped")
     parser.add_argument("--out-topic", default="/cup_pose")
     parser.add_argument("--min-score", type=float, default=0.0)
+    parser.add_argument("--head-joint-topic", default=None,
+                        help="목 관절 상태 토픽(sensor_msgs/JointState, URDF 라디안). "
+                             "주면 T_base_cam 을 목 각도로 매번 계산한다 — "
+                             "yaml 의 정적 camera 블록은 한 자세에서만 맞는다")
+    parser.add_argument("--head-max-age", type=float, default=1.0,
+                        help="목 각도가 이보다 오래되면 발행하지 않는다(초)")
     args = parser.parse_args()
 
     ext = load_extrinsics(args.extrinsics)
@@ -166,11 +196,51 @@ def main() -> None:
                 self.create_subscription(
                     Detection3DArray, args.in_topic, self._detections_cb, 10)
             self._published = 0
+            self._head_urdf: tuple[float, float] | None = None
+            self._head_stamp_s: float | None = None
+            self._head_warned = 0
+            if args.head_joint_topic:
+                from sensor_msgs.msg import JointState
+                self.create_subscription(
+                    JointState, args.head_joint_topic, self._head_cb, 10)
+                self.get_logger().info(
+                    f"목 각도 인식 모드: {args.head_joint_topic} "
+                    f"(최대 {args.head_max_age}s) — T_base_cam 을 매번 계산한다")
             self.get_logger().info(
                 f"relay: {args.in_topic} → {args.out_topic} "
                 f"(in_type={args.in_type}, extrinsics={args.extrinsics}, "
                 f"min_score={args.min_score})"
             )
+
+        def _head_cb(self, msg) -> None:
+            """URDF 라디안으로 온다 — 여기서 인코더 각으로 되돌린다."""
+            names = list(msg.name)
+            try:
+                pan = float(msg.position[names.index("head_j_pan")])
+                tilt = float(msg.position[names.index("head_j_tilt")])
+            except (ValueError, IndexError):
+                return
+            self._head_urdf = (np.degrees(pan), np.degrees(tilt))
+            self._head_stamp_s = self.get_clock().now().nanoseconds * 1e-9
+
+        def _current_extrinsics(self) -> Extrinsics | None:
+            """목 인식 모드면 살아 있는 각도로 만든 것, 아니면 정적값.
+
+            ★각도가 오래됐으면 **None 을 돌려 발행을 막는다.** 틀린 컵 좌표는
+            없느니만 못하다 — 정책이 그걸 믿고 손을 뻗는다.
+            """
+            if not args.head_joint_topic:
+                return ext
+            now = self.get_clock().now().nanoseconds * 1e-9
+            if not head_state_is_usable(self._head_stamp_s, now, args.head_max_age):
+                self._head_warned += 1
+                if self._head_warned % 30 == 1:
+                    self.get_logger().warning(
+                        f"목 각도가 없거나 오래됐다({args.head_joint_topic}) — "
+                        f"cup_pose 를 발행하지 않는다 [{self._head_warned}회]")
+                return None
+            from head_fk_chain import encoder_from_urdf
+            return extrinsics_at_head(ext, *encoder_from_urdf(*self._head_urdf))
 
         def _detections_cb(self, msg) -> None:
             candidates = []
@@ -187,7 +257,10 @@ def main() -> None:
             if best is None:
                 return
             _, cad_pos, cad_quat = best
-            pos, quat = cad_pose_to_base_body(ext, cad_pos, cad_quat)
+            live = self._current_extrinsics()
+            if live is None:
+                return
+            pos, quat = cad_pose_to_base_body(live, cad_pos, cad_quat)
             self._publish(msg.header.stamp, pos, quat)
 
         def _posestamped_cb(self, msg) -> None:
@@ -197,7 +270,10 @@ def main() -> None:
             if best is None:
                 return
             _, cad_pos, cad_quat = best
-            pos, quat = cad_pose_to_base_body(ext, cad_pos, cad_quat)
+            live = self._current_extrinsics()
+            if live is None:
+                return
+            pos, quat = cad_pose_to_base_body(live, cad_pos, cad_quat)
             self._publish(msg.header.stamp, pos, quat)
 
         def _publish(self, stamp, pos, quat) -> None:

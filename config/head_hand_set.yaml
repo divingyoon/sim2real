@@ -1,0 +1,10 @@
+# head_compliant_hold.py 로 손으로 맞춘 자세
+motors:
+  pan:
+    id: 1
+    tick: 2073
+    deg: 2.242
+  tilt:
+    id: 2
+    tick: 1833
+    deg: -18.857

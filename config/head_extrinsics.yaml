@@ -1,0 +1,33 @@
+# head 카메라 extrinsics — hand-eye (2026-09-01)
+#
+# ★기존 global_camera_extrinsics.yaml 과 달리 **목 자세에 묶이지 않는다.**
+#   T_base_cam(pan,tilt) = T_base_neck(pan,tilt) ∘ T_neck_cam
+#   FK 는 scripts/head_fk_chain.py (URDF 를 직접 읽는다).
+#
+# 25자세 · 코너 553개 · RMS 재투영 1.214 px
+#   (0.64 m 에서 약 1.3 mm)
+# 야코비안 조건수 5.45e+02 — 잘 구속됨
+#
+# ★인코더 영점 오프셋은 **관측 불가능**해서 풀지 않는다(게이지 자유도).
+#   pan 오프셋은 보드 자세로, tilt 오프셋은 T_neck_cam 으로 흡수된다.
+#   자세한 근거는 refine_head_handeye.py 문서화 참조.
+
+# T_neck_cam: head_camera(tilt 링크) ← camera_color_optical_frame
+neck_to_camera:
+  matrix:
+    - [-0.018382524, -0.999667359, -0.018090184, +0.051161979]
+    - [-0.999815460, +0.018480193, -0.005246761, +0.052616775]
+    - [+0.005579325, +0.017990397, -0.999822593, +0.009042476]
+    - [+0.000000000, +0.000000000, +0.000000000, +1.000000000]
+
+# 참고: 기준 자세(pan 0 / tilt -20)에서의 T_base_cam.
+#   이 값은 파생물이다 — 목을 돌리면 위 식으로 다시 계산할 것.
+reference_pose:
+  pan_deg: 0.0
+  tilt_deg: -20.0
+  position: [+0.067483825, +0.038116775, +0.841995576]
+  orientation_wxyz: [+0.115742073, -0.690661053, +0.704161820, -0.117248508]
+
+# 부산물: 보드가 테이블 어디에 있었는지 (hand-eye 가 자동으로 찾아냈다)
+board_in_base:
+  position: [+0.170713, -0.084123, +0.226359]

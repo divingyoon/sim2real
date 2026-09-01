@@ -1,0 +1,29 @@
+# head(목) 기준 자세와 게인 — local5090 기본값 (2026-09-01 확정)
+#
+# 손으로 맞춘 자세(head_hand_set.yaml: pan +2.24 / tilt -18.86)를 반올림한 값이다.
+# 적용은 `scripts/head_home.py` 로 한다 — 순서가 중요하다(아래 참조).
+port: /dev/ttyUSB0
+baud: 1000000          # ★가정하지 말 것. 버스가 바뀌면 ./dxl.sh scan 으로 확인
+
+motors:
+  pan:
+    id: 1
+    deg: 0.0
+  tilt:
+    id: 2
+    deg: -20.0
+
+# Position I Gain — XC330 은 0 으로 출하되고 이 레지스터는 RAM 이다.
+# I=0 이면 P 만으로 중력을 이겨야 해 tilt 가 -20° 지령에서 +1.5° 처진다.
+# 2026-09-01 스윕: I=0 →+0.44° · 200 →+0.09° · 400 →+0.00° · 800 →+0.00°
+# 진동(σ)은 800 까지도 0.000° 였다. 400 은 오차 0 이면서 여유가 크다.
+position_i_gain: 400
+
+# ★★순서 규약: Operating Mode 를 쓰면 제어 게인이 그 모드의 기본값으로 **리셋된다**.
+#   그래서 반드시  토크off → 모드 → **게인** → 프로파일 → 토크on → **목표**  순으로 쓴다.
+#   게인을 모드보다 먼저 넣으면 조용히 지워진다. 또 토크 0→1 은 Goal Position 을
+#   Present 로 덮어쓰므로, 목표를 토크보다 먼저 쓰면 "떨어진 자리"가 목표가 된다.
+#   (둘 다 09.01 에 실제로 겪었다)
+operating_mode: 3      # Position Control — 자세를 지키는 용도
+profile_acceleration: 20
+profile_velocity: 50

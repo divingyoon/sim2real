@@ -128,3 +128,45 @@ def test_posestamped_candidate_feeds_same_transform_as_detection():
     _, pos_c, quat_c = posestamped_to_candidate(0.2, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0)
     pos, quat = cad_pose_to_base_body(ext, pos_c, quat_c)
     assert np.allclose(pos, [1.0, 0.2, 0.5], atol=1e-12)
+
+
+# ---------- 목 각도 인식 모드 (2026-09-01) ----------
+
+def test_extrinsics_with_head_replaces_only_camera_block():
+    """★목 각도로 카메라만 갈아끼운다 — cad_to_body 는 절대 안 건드린다."""
+    import numpy as np
+    from cup_pose_relay import extrinsics_at_head, load_extrinsics, DEFAULT_EXTRINSICS
+    base = load_extrinsics(DEFAULT_EXTRINSICS)
+    moved = extrinsics_at_head(base, 15.0, -20.0)
+    assert np.allclose(moved.cad_to_body_pos, base.cad_to_body_pos)
+    assert np.allclose(moved.cad_to_body_quat, base.cad_to_body_quat)
+    assert moved.base_frame == base.base_frame
+    assert not np.allclose(moved.cam_pos, base.cam_pos)     # 목이 돌았으니 달라야
+
+
+def test_extrinsics_at_home_matches_static_value():
+    """기준 자세에서는 정적값과 같아야 한다 — 모드를 켜도 점프가 없어야 한다."""
+    import numpy as np
+    from cup_pose_relay import extrinsics_at_head, load_extrinsics, DEFAULT_EXTRINSICS
+    base = load_extrinsics(DEFAULT_EXTRINSICS)
+    same = extrinsics_at_head(base, 0.0, -20.0)
+    assert np.allclose(same.cam_pos, base.cam_pos, atol=1e-6)
+    assert abs(float(np.dot(same.cam_quat, base.cam_quat))) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_extrinsics_at_head_does_not_mutate_input():
+    """불변 — 원본 Extrinsics 를 바꾸면 안 된다."""
+    import numpy as np
+    from cup_pose_relay import extrinsics_at_head, load_extrinsics, DEFAULT_EXTRINSICS
+    base = load_extrinsics(DEFAULT_EXTRINSICS)
+    before = base.cam_pos.copy()
+    extrinsics_at_head(base, 30.0, -40.0)
+    assert np.allclose(base.cam_pos, before)
+
+
+def test_head_state_staleness():
+    """★오래된 목 각도로 컵을 내보내면 안 된다 — 틀린 좌표는 없느니만 못하다."""
+    from cup_pose_relay import head_state_is_usable
+    assert head_state_is_usable(last_stamp_s=10.0, now_s=10.5, max_age_s=1.0)
+    assert not head_state_is_usable(last_stamp_s=10.0, now_s=12.0, max_age_s=1.0)
+    assert not head_state_is_usable(last_stamp_s=None, now_s=12.0, max_age_s=1.0)
