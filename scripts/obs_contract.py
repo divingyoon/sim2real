@@ -109,6 +109,21 @@ def _resolve_elements(fn: ast.FunctionDef, arg: ast.AST,
     return None
 
 
+def _returned_policy_vars(fn: ast.FunctionDef) -> list[str]:
+    """`return {"policy": ...}` 안에서 참조되는 지역 변수 이름들 (등장 순)."""
+    out: list[str] = []
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.Return) or not isinstance(node.value, ast.Dict):
+            continue
+        for key, val in zip(node.value.keys, node.value.values):
+            if not (isinstance(key, ast.Constant) and key.value == "policy"):
+                continue
+            for sub in ast.walk(val):
+                if isinstance(sub, ast.Name) and sub.id not in out:
+                    out.append(sub.id)
+    return out
+
+
 def _find_obs_elements(
     fn: ast.FunctionDef, assigns: dict[str, list[ast.AST]]
 ) -> tuple[str, list[ast.AST]]:
@@ -122,9 +137,21 @@ def _find_obs_elements(
             elts = _resolve_elements(fn, value.args[0], assigns)
             if elts:
                 return var, elts
+    # 후보 이름에 없으면 **반환문의 `"policy"` 키**를 따라간다. obs 변수 이름은
+    # 태스크마다 다르고(grasp_s2r 은 `_noisy`), 후보 목록을 손으로 늘리면 또 새는다.
+    for name in _returned_policy_vars(fn):
+        for value in assigns.get(name, []):
+            if not (isinstance(value, ast.Call) and getattr(value.func, "attr", None) == "cat"):
+                continue
+            if not value.args:
+                continue
+            elts = _resolve_elements(fn, value.args[0], assigns)
+            if elts:
+                return name, elts
     raise ObsContractError(
         "obs 를 만드는 `torch.cat(...)` 을 찾지 못했다 "
-        f"(찾은 변수 후보: {', '.join(OBS_VAR_CANDIDATES)})"
+        f"(찾은 변수 후보: {', '.join(OBS_VAR_CANDIDATES)}, "
+        f"반환 policy: {', '.join(_returned_policy_vars(fn)) or '없음'})"
     )
 
 

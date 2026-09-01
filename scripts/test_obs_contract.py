@@ -190,3 +190,50 @@ def test_real_grasp_sensor_marks_noised_segments():
     noised = [s.name for s in c.segments if s.dr_noise]
     assert "arm_joint_pos" in noised
     assert "last_actions" not in noised
+
+
+# ── 반환문에서 policy 변수를 찾는다 ────────────────────────────────────────
+RETURNED = '''
+import torch
+class E:
+    def _get_observations(self):
+        _mine = torch.cat([self.a, self.b], dim=-1)
+        state = torch.cat([self.a, self.b, self.c], dim=-1)
+        return {"policy": torch.nan_to_num(_mine), "critic": state}
+'''
+
+
+def test_extract_follows_the_variable_returned_under_policy(tmp_path):
+    """obs 변수 이름은 태스크마다 다르다 — 후보 목록에 없으면 반환문을 따라가야 한다."""
+    c = extract_obs_contract(_write(tmp_path, RETURNED))
+
+    assert c.var == "_mine"
+    assert [s.name for s in c.segments] == ["self.a", "self.b"]
+
+
+RETURNED_PLAIN = '''
+import torch
+class E:
+    def _get_observations(self):
+        _weird = torch.cat([self.x], dim=-1)
+        return {"policy": _weird}
+'''
+
+
+def test_extract_handles_a_plain_policy_value(tmp_path):
+    assert extract_obs_contract(_write(tmp_path, RETURNED_PLAIN)).var == "_weird"
+
+
+NO_POLICY = '''
+import torch
+class E:
+    def _get_observations(self):
+        _weird = torch.cat([self.x], dim=-1)
+        return {"critic": _weird}
+'''
+
+
+def test_extract_still_fails_loudly_when_nothing_matches(tmp_path):
+    import pytest
+    with pytest.raises(ObsContractError, match="찾지 못했다"):
+        extract_obs_contract(_write(tmp_path, NO_POLICY))
