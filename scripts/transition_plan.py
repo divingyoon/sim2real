@@ -52,6 +52,28 @@ def ramp(
     return a[None, :] + t * (b - a)[None, :]
 
 
+def ramp_via(
+    start: Sequence[float],
+    waypoints: Sequence[Sequence[float]],
+    goal: Sequence[float],
+    *,
+    max_vel: float,
+    dt: float,
+) -> np.ndarray:
+    """경유점을 지나는 램프. 직선이 몸에 걸릴 때 자유 영역만 지나가게 끊는다.
+
+    이어붙일 때 **경유점 프레임을 두 번 넣지 않는다** — 그러면 그 프레임에서 속도가
+    0 이 되어 재생기가 멈춘 것으로 읽는다.
+    """
+    nodes = [list(start)] + [list(w) for w in waypoints] + [list(goal)]
+    n = len(nodes[0])
+    for i, node in enumerate(nodes):
+        if len(node) != n:
+            raise ValueError(f"{i}번째 자세의 길이가 다르다: {len(node)} vs {n}")
+    segments = [ramp(a, b, max_vel=max_vel, dt=dt) for a, b in zip(nodes, nodes[1:])]
+    return np.vstack([segments[0]] + [seg[1:] for seg in segments[1:]])
+
+
 def contact_set(
     body_names: Sequence[str], forces: Sequence[float], *, threshold: float
 ) -> frozenset[str]:

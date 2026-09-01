@@ -11,6 +11,7 @@ from transition_plan import (
     describe_transition,
     new_contacts,
     ramp,
+    ramp_via,
     steps_for,
 )
 
@@ -57,6 +58,40 @@ def test_ramp_refuses_a_shape_mismatch():
 def test_ramp_refuses_a_nonpositive_velocity():
     with pytest.raises(ValueError, match="속도"):
         ramp([0.0], [1.0], max_vel=0.0, dt=0.1)
+
+
+# ── 경유 램프 ──────────────────────────────────────────────────────────────
+def test_ramp_via_with_no_waypoint_is_just_a_ramp():
+    direct = ramp([0.0], [1.0], max_vel=0.5, dt=0.1)
+
+    assert np.allclose(ramp_via([0.0], [], [1.0], max_vel=0.5, dt=0.1), direct)
+
+
+def test_ramp_via_passes_through_every_waypoint():
+    path = ramp_via([0.0], [[0.5]], [0.2], max_vel=0.5, dt=0.1)
+
+    assert path[0] == pytest.approx([0.0])
+    assert path[-1] == pytest.approx([0.2])
+    assert path.max() == pytest.approx(0.5)
+
+
+def test_ramp_via_does_not_repeat_the_waypoint_frame():
+    """구간을 이어붙일 때 경유점이 두 번 들어가면 그 프레임에서 속도가 0 이 된다."""
+    a = ramp([0.0], [0.5], max_vel=0.5, dt=0.1)
+    b = ramp([0.5], [0.2], max_vel=0.5, dt=0.1)
+
+    assert ramp_via([0.0], [[0.5]], [0.2], max_vel=0.5, dt=0.1).shape[0] == a.shape[0] + b.shape[0] - 1
+
+
+def test_ramp_via_still_respects_the_velocity_limit():
+    path = ramp_via([0.0, 0.0], [[1.0, -0.5]], [0.3, 0.4], max_vel=0.5, dt=0.1)
+
+    assert (np.abs(np.diff(path, axis=0)) / 0.1).max() <= 0.5 + 1e-9
+
+
+def test_ramp_via_refuses_a_waypoint_of_the_wrong_length():
+    with pytest.raises(ValueError, match="길이"):
+        ramp_via([0.0, 0.0], [[1.0]], [0.3, 0.4], max_vel=0.5, dt=0.1)
 
 
 # ── 접촉 판정 ──────────────────────────────────────────────────────────────
