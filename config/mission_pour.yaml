@@ -198,7 +198,10 @@ run:
   grasp_left:
     - note: ★venv 없는 셸에서 (isaaclab 모듈을 못 찾는다). RViz 는 꺼 둘 것
       argv:
-        ["{repo}/../IsaacLab/isaaclab.sh", -p, "{repo}/scripts/probe_v2_shadow_record.py",
+        # ★HDGP_V2_VENDOR_GAINS=1 필수 — v2B25 는 실기 벤더 게인으로 학습됐고, 없이 돌리면
+        #   팔이 4~30배 뻣뻣해져 컵을 쳐낸다(09.01 실측 0/8 → 8/8).
+        [env, "HDGP_V2_VENDOR_GAINS=1",
+         "{repo}/../IsaacLab/isaaclab.sh", -p, "{repo}/scripts/probe_v2_shadow_record.py",
          --checkpoint, "{checkpoint:left}", --steps, "1500",
          --out, "{repo}/logs/shadow/sim_live.npz",
          --stream_udp, "47311", --stream_rate_scale, "0.25", --stream_meas, --hold_open]

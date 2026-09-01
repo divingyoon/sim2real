@@ -1,0 +1,37 @@
+{
+  "r_aj": {
+    "frames": 161,
+    "seconds": 2.67,
+    "new_contacts": {},
+    "min_z": {
+      "body_root": 0.0,
+      "body_link": 0.0,
+      "r_hl_pinky_3": 0.3261,
+      "r_hl_middle_tip": 0.3266,
+      "r_hl_ring_tip": 0.3278
+    }
+  },
+  "l_aj": {
+    "frames": 130,
+    "seconds": 2.15,
+    "new_contacts": {
+      "l_hl_gripper_base": [
+        100,
+        83.93
+      ],
+      "l_hl_gripper_left_finger": [
+        128,
+        142.25
+      ]
+    },
+    "min_z": {
+      "body_root": 0.0,
+      "body_link": 0.0,
+      "l_hl_gripper_tcp": 0.3362,
+      "l_hl_gripper_right_finger": 0.3376,
+      "l_hl_gripper_left_finger": 0.339
+    }
+  },
+  "verdict": "fail",
+  "order": "right_first"
+}
