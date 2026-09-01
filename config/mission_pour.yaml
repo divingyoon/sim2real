@@ -1,0 +1,211 @@
+# 양팔 물붓기 한 사이클 — 단계·가드·명령의 단일 진실원천
+#
+# 「브링업 → preset 자세 → 컵 인식 → 좌팔 파지 → 우팔 파지 → 물붓기 → 내려놓기 → 반복」
+#
+# ★이 파일의 값어치는 "자동으로 돈다"가 아니라 **막힌 것을 그 자리에서 말한다**에 있다.
+#   아직 만들지 않은 단계는 `blocked` 로 선언하고 근거 파일을 함께 적는다. 숨기지 않는다.
+#
+# ★정책은 하드코딩하지 않는다. 아래 `checkpoints` 한 곳만 고치면 교체된다.
+#   md5 가 다르면 가드가 거부한다 — 바꿔 끼웠는데 조용히 옛것으로 도는 사고를 막는다.
+#
+# 실행:  python3 scripts/mission_run.py --plan          # 전체 판정 (아무것도 발행 안 함)
+#        python3 scripts/mission_run.py --stage <id>    # 그 단계의 명령만 출력
+#        python3 scripts/mission_run.py --stage <id> --execute --approve <id>
+
+name: 양팔 물붓기
+loop_to: perceive
+
+artifacts:
+  reset_right_npz: logs/shadow/reset_both/reset_right_v2.npz
+  reset_left_npz: logs/shadow/reset_both/reset_left.npz
+  head_home_yaml: config/head_home.yaml
+  cup_poses: config/cup_pose_stub.json
+
+checkpoints:
+  # 2026-09-01 사용자 지정. 교체할 때는 path·md5·params 셋을 함께 고친다.
+  left:
+    path: logs/policy/left_v2B25/nn/v2B25_tip30_ep2150.pth
+    md5: "27219429"
+    params: logs/policy/left_v2B25/params
+  right:
+    path: logs/policy/right_d3/nn/d3_ep20000.pth
+    md5: "485d8abf"
+    params: logs/policy/right_d3/params
+
+stages:
+  - id: preflight
+    title: 배선·환경 사전점검 (읽기 전용)
+
+  - id: bringup
+    title: 모터 전원 → CAN → 드라이버 기동
+    needs: [preflight]
+    needs_why: 점검 전에 띄우면 오배선 상태로 모터가 돈다
+    touches_real: true
+
+  - id: gains
+    title: 손 JTC 게인 적용 (p=4.5)
+    needs: [bringup]
+    needs_why: 게인은 RAM 이라 드라이버가 뜬 뒤에만 쓸 수 있다
+    touches_real: true
+
+  - id: lowlevel
+    title: 저수준 확인 — 기동 자세·홀드 드리프트 (읽기 전용)
+    needs: [gains]
+
+  - id: preset_right
+    title: 우팔 차렷 → preset 홈
+    needs: [lowlevel]
+    artifacts: [reset_right_npz]
+    touches_real: true
+
+  - id: preset_left
+    title: 좌팔 차렷 → preset 홈
+    needs: [preset_right]
+    needs_why: >-
+      좌팔 fabric world 의 right_arm_body 구가 우팔 rest 자리에 박혀 있다. 우팔이
+      차렷에 있는 동안 좌팔을 움직이면 fabric 의 전제가 거짓이다
+      (메모리 both-arm-reset-trajectory).
+    artifacts: [reset_left_npz]
+    touches_real: true
+
+  - id: preset_head
+    title: 목 기준 자세 (pan 0 · tilt −20 · I게인 400)
+    needs: [preset_left]
+    artifacts: [head_home_yaml]
+    touches_real: true
+
+  - id: perceive
+    title: 컵 2개 자세 확보 — ★현재는 고정 스텁
+    needs: [preset_head]
+    artifacts: [cup_poses]
+
+  - id: grasp_left
+    title: 좌팔 파지 (Isaac-in-the-loop 라이브 그림자)
+    needs: [perceive]
+    checkpoints: [left]
+    touches_real: true
+    blocked: >-
+      preset 궤적의 도착 홈이 이 정책의 홈과 다르다 — v2E19 기준 reset_left.npz 대비
+      j4 −0.3671 rad(21.0°) · j7 −0.4998 rad(28.6°) · j2 +0.0502 rad(2.9°).
+      v2B25 홈으로 가는 새 preset 궤적을 굽거나 좌팔 배포본을 되돌려야 한다.
+    evidence: logs/policy/left_v2B25/README.md
+
+  - id: grasp_right
+    title: 우팔 파지
+    needs: [grasp_left]
+    checkpoints: [right]
+    touches_real: true
+    blocked: >-
+      우팔 라이브 경로가 없다. grasp_obs_builder.py 의 ACTOR_OBS_DIM 은 154 인데
+      배포 정책 d3 는 obs 155 다. 좌팔과 같은 Isaac-in-the-loop 형태를 만드는 것이
+      계획된 경로다(로드맵 P3).
+    evidence: scripts/grasp_obs_builder.py
+
+  - id: bridge
+    title: 파지 자세 → 붓기 시작 자세 전환
+    needs: [grasp_right]
+    touches_real: true
+    blocked: >-
+      전환 램프 궤적이 없다. pour 초기 pose 가 두 grasp 정책의 goal 분포 밖이다 —
+      받는 컵(좌) y −14.5 cm · 붓는 컵(우) x −11 cm. goal 지령만으로는 이송이
+      구조적으로 불가능하고, 리셋 궤적과 같은 방식으로 한 번 구워야 한다(로드맵 P4).
+    evidence: logs/shadow/pour_traj/README.md
+
+  - id: pour
+    title: 물붓기
+    needs: [bridge]
+    touches_real: true
+    blocked: >-
+      배포 가능한 pour 정책이 없다. RA-L both/pour_sensor 는 현 소스로 재생 불가
+      (NUM_ACTIONS 드리프트), 재학습 b1_multicup1-r3 는 success 16.2%·spill 31.9%
+      에서 멈췄다. 궤적 재생 노선도 peak 5.67 rad/s 로 실기 한계의 2.8배다(로드맵 P6).
+    evidence: docs/pour_sensor_deployment.md
+
+  - id: place_right
+    title: 우팔 컵 내려놓기
+    needs: [pour]
+    touches_real: true
+    blocked: >-
+      place 가 정의되어 있지 않다. grasp_inference.py 의 PLACING(명령 궤적 역재생)이
+      유일한 구현인데 그것은 grasp 에피소드 내부용이라 pour 이후 상태를 모른다.
+    evidence: scripts/grasp_inference.py
+
+# ── 단계별 명령 ────────────────────────────────────────────────────────────
+# manual: 러너가 절대 실행하지 않는다 (sudo·다른 PC·venv 없는 셸). 화면에 띄우고 확인만.
+# background: 단계가 끝날 때까지 띄워 둔다.
+# execute_args: --execute 일 때만 덧붙는다.
+run:
+  preflight:
+    - note: >-
+        ★제어 PC(5070ti)에서 — 배선/IP 교차 사전검사. 두 NIC 이 교차되면 손으로 갈
+        패킷이 카메라 랜선으로 나간다. 다른 기계에서 돌리면 항상 FAIL 이므로 수동이다
+      argv: [bash, "{repo}/scripts/net_preflight.sh"]
+      manual: true
+    - note: 이 기계의 환경 진단 (읽기 전용 — 설치는 하지 않는다)
+      argv: [bash, "{repo}/scripts/setup_check.sh"]
+
+  bringup:
+    - note: ★CAN 설정 — sudo 필요, 사용자 셸에서
+      argv: [sudo, ip, link, set, can0, up, type, can, bitrate, "1000000", fd, "on"]
+      manual: true
+    - note: ★모터 전원을 먼저 켠 뒤 launch. 순서가 바뀌면 enable 을 못 받아 무동작한다
+      argv:
+        [ros2, launch, openarm_bringup, openarm.bimanual.launch.py,
+         "use_fake_hardware:=false", "right_can_interface:=can0", "left_can_interface:=can1"]
+      manual: true
+
+  gains:
+    - note: 테솔로 우손 JTC PID p=4.5 (bringup 마다 재적용 — RAM 이다)
+      argv: [python3, "{repo}/scripts/apply_hand_gains.py", --p, "4.5", --d, "0"]
+      execute_args: [--execute]
+
+  lowlevel:
+    - note: 기동 자세 확인 (TEST0 · 발행 없음)
+      argv: [python3, "{repo}/scripts/lowlevel_check.py", --robot, tesollo_sensor__right]
+
+  preset_right:
+    - note: 연속 중력보상 — 재생 내내 살아 있어야 한다
+      argv: [python3, "{repo}/scripts/gravity_comp_node.py", --robot, tesollo_sensor__right]
+      execute_args: [--execute]
+      background: true
+    - note: 우팔 차렷 → preset 홈 (4구간 · 손은 들어 올린 경유점에서 편다)
+      argv:
+        [python3, "{repo}/scripts/shadow_replay.py", --sim, "{artifact:reset_right_npz}",
+         --robot, tesollo_sensor__right, --rate-scale, "1.0", --allow-idle-arm-mismatch]
+      execute_args: [--execute]
+
+  preset_left:
+    - note: 좌팔 차렷 → preset 홈 (2605프레임 · 52.1 s · peak 0.25 rad/s)
+      argv:
+        [python3, "{repo}/scripts/shadow_replay.py", --sim, "{artifact:reset_left_npz}",
+         --robot, gripper_left, --rate-scale, "1.0", --allow-idle-arm-mismatch]
+      execute_args: [--execute]
+
+  preset_head:
+    - note: 토크off → 모드 → 게인 → 프로파일 → 토크on → 목표. 이 순서가 강제된다
+      argv: [python3, "{repo}/scripts/head_home.py", --config, "{artifact:head_home_yaml}"]
+      execute_args: [--execute]
+
+  # perceive 에는 명령이 없다 — 산출물(스텁 JSON)이 있는지만 본다.
+  # fd++ 2컵(로드맵 P5)이 들어오면 여기에 cup_pose_relay 실행이 붙는다.
+
+  grasp_left:
+    - note: ★venv 없는 셸에서 (isaaclab 모듈을 못 찾는다). RViz 는 꺼 둘 것
+      argv:
+        ["{repo}/../IsaacLab/isaaclab.sh", -p, "{repo}/scripts/probe_v2_shadow_record.py",
+         --checkpoint, "{checkpoint:left}", --steps, "1500",
+         --out, "{repo}/logs/shadow/sim_live.npz",
+         --stream_udp, "47311", --stream_rate_scale, "0.25", --stream_meas, --hold_open]
+      manual: true
+    - note: 브리지 — 선보상 오프셋은 좌팔 캘리브 문서 §4 의 실측값
+      argv:
+        [python3, "{repo}/scripts/isaacsim_cmd_to_jtc.py", --robot, gripper_left,
+         --max-vel, "1.0",
+         --arm-offset, " -0.0666,-0.0298,-0.0101,+0.0549,+0.0174,-0.0001,-0.0732"]
+      background: true
+    - note: UDP → ROS 어댑터
+      argv:
+        [python3, "{repo}/scripts/udp_cmd_to_ros.py", --port, "47311",
+         --log, "{repo}/logs/shadow/live_adapter.csv"]
+      execute_args: [--execute]
+      background: true

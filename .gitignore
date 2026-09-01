@@ -22,3 +22,6 @@ logs/shadow/rosbags/
 
 # 정책 체크포인트 바이너리 — 진실원천은 hdgp/log/. 여기엔 params dump 와 README 만 둔다
 logs/policy/**/*.pth
+
+# 미션 실행 기록 (state.json/jsonl/pids) — 런타임 상태이지 산출물이 아니다
+logs/mission/

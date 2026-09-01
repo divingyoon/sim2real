@@ -143,7 +143,12 @@ if want vision; then
     miss "Isaac ROS dev 환경" "INSTALL.md Step 7"
   fi
 
-  if grep -q "position: \[0.0, 0.0, 0.0\]" "${REPO_DIR}/config/global_camera_extrinsics.yaml" 2>/dev/null; then
+  # ★`camera:` 블록의 position 만 본다. 파일 전체를 grep 하면 `cad_to_body` 의
+  # position(회전만 하는 변환이라 0 벡터가 정상)을 플레이스홀더로 오독해
+  # "교체 전 실기 구동 금지"라는 틀린 판정을 낸다 (2026-09-01 실측).
+  CAM_POS="$(awk '/^camera:/{f=1;next} f&&/^[a-z_]/{f=0} f&&/position:/{print;exit}' \
+      "${REPO_DIR}/config/global_camera_extrinsics.yaml" 2>/dev/null)"
+  if [[ -z "$CAM_POS" || "$CAM_POS" == *"[0.0, 0.0, 0.0]"* ]]; then
     miss "카메라 extrinsics가 PLACEHOLDER" "실측 캘리브 후 config/global_camera_extrinsics.yaml 교체 (INSTALL.md Step 8) — 교체 전 실기 구동 금지"
   else
     ok "카메라 extrinsics 캘리브됨 (값 교체 확인됨 — 정확성은 별도 검증)"
