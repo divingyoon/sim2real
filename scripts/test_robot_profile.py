@@ -22,6 +22,7 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 from robot_profile import (  # noqa: E402
+    load_env_cfg_literals,
     HDGP_OPENARM_SRC,
     ROBOT_CONFIG_DIR,
     available_profiles,
@@ -485,3 +486,43 @@ def test_recurrence_is_detectable_because_deployment_must_carry_hidden_state():
 
     assert checkpoint_is_recurrent({"a2c_network.rnn.rnn.weight_hh_l0": 1})
     assert not checkpoint_is_recurrent({"a2c_network.actor_mlp.0.weight": 1})
+
+
+# ── 클래스별 리터럴 읽기 ───────────────────────────────────────────────────
+TWO_CLASSES = '''
+class A:
+    shared: float = 1.0
+    only_a: int = 7
+
+class B:
+    shared: float = 2.0
+    only_b: int = 9
+'''
+
+
+def _cfg(tmp_path, text):
+    p = tmp_path / "cfg.py"
+    p.write_text(text)
+    return p
+
+
+def test_literals_without_a_class_still_fail_loudly_on_conflict(tmp_path):
+    """같은 이름이 다른 값으로 두 번 나오면 어느 쪽이 진짜인지 추측하지 않는다."""
+    import pytest
+    with pytest.raises(ValueError, match="shared"):
+        load_env_cfg_literals(_cfg(tmp_path, TWO_CLASSES))
+
+
+def test_literals_can_be_scoped_to_one_class(tmp_path):
+    """한 파일에 좌·우 cfg 가 같이 사는 경우가 있다 — 어느 클래스인지 말할 수 있어야 한다."""
+    out = load_env_cfg_literals(_cfg(tmp_path, TWO_CLASSES), class_name="B")
+
+    assert out["shared"] == 2.0
+    assert out["only_b"] == 9
+    assert "only_a" not in out
+
+
+def test_scoping_to_a_missing_class_says_so(tmp_path):
+    import pytest
+    with pytest.raises(KeyError, match="없다"):
+        load_env_cfg_literals(_cfg(tmp_path, TWO_CLASSES), class_name="Z")

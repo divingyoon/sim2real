@@ -449,15 +449,24 @@ def _eval_cfg_node(node):
     return eval(compile(ast.Expression(node), "<cfg>", "eval"), {"__builtins__": {}}, {})
 
 
-def load_env_cfg_literals(path: Path) -> dict[str, object]:
-    """env_cfg 소스의 `name: T = <literal>` 을 모두 수집한다.
+def load_env_cfg_literals(path: Path, class_name: str | None = None) -> dict[str, object]:
+    """env_cfg 소스의 `name: T = <literal>` 을 수집한다.
 
     같은 이름이 여러 클래스에서 **다른 값**으로 나오면 예외 — 어느 쪽이 진짜인지
-    추측하지 않는다.
+    추측하지 않는다. 한 파일에 좌·우 cfg 가 같이 사는 경우가 있으므로(grasp_s2r 은
+    `GraspS2RTesolloRightEnvCfg` 와 `GraspS2RGripperLeftEnvCfg` 가 한 파일이다)
+    `class_name` 으로 범위를 좁힐 수 있다.
     """
     tree = ast.parse(Path(path).read_text())
+    scope: ast.AST = tree
+    if class_name is not None:
+        found = [n for n in ast.walk(tree)
+                 if isinstance(n, ast.ClassDef) and n.name == class_name]
+        if not found:
+            raise KeyError(f"{path}: 클래스 {class_name!r} 이 없다")
+        scope = found[0]
     out: dict[str, object] = {}
-    for node in ast.walk(tree):
+    for node in ast.walk(scope):
         if not isinstance(node, ast.AnnAssign) or not isinstance(node.target, ast.Name):
             continue
         if node.value is None:
