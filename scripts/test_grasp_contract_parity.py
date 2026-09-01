@@ -105,9 +105,17 @@ def test_segment_dims_sum_to_contract(name):
 
 @pytest.mark.parametrize("name", ALL_PROFILES)
 def test_profile_contract_matches_constants(name):
-    """구성 프로필이 선언한 계약도 같아야 한다(로드 시 검증되지만 명시적으로 고정)."""
-    C = _consts_of(name)
+    """구성 프로필이 선언한 계약도 같아야 한다(로드 시 검증되지만 명시적으로 고정).
+
+    ★source=checkpoint 프로필은 제외 — 계약의 진실원천이 hdgp_package 상수가 아니라
+    체크포인트다(예: tesollo_sensor__right 는 08.31 부터 grasp_s2r 의 m1, obs 155 —
+    package 상수 154 와 **의도적으로** 다르다). 그쪽은
+    test_robot_profile 의 checkpoint 대조가 잡는다.
+    """
     p = load_robot_profile(name)
+    if p.contract.source == "checkpoint":
+        pytest.skip(f"{name}: 계약 원천이 체크포인트 — constants 대조 비적용")
+    C = _consts_of(name)
     assert p.contract.obs_dim == C.NUM_OBSERVATIONS
     assert p.contract.action_dim == C.NUM_ACTIONS
 
