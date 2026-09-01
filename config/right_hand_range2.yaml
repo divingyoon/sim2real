@@ -1,0 +1,54 @@
+# 테솔로 우손 실측 가동범위 (probe_hand_range.py)
+# 측정: 2026-09-01 10:06:30
+# URDF 한계가 아니라 **실제로 갈 수 있는 곳**이다. 도달 못하는 지령을 주면
+# 컨트롤러가 영원히 밀어붙여 발열한다 — sim·프로필·정책 액션에 같은 값을 쓸 것.
+joints:
+  rj_dg_2_2:
+    urdf: [0.0, 2.0071]
+    measured: [0.1693, 0.9809]
+    reach_ratio: 0.676
+    hi_why: reached
+    lo_why: reached
+    temp_c: 28.1
+  rj_dg_3_2:
+    urdf: [0.0, 1.9548]
+    measured: [0.2583, 0.9669]
+    reach_ratio: 0.591
+    hi_why: reached
+    lo_why: reached
+    temp_c: 28.6
+  rj_dg_4_2:
+    urdf: [0.0, 1.9024]
+    measured: [0.2583, 0.9529]
+    reach_ratio: 0.579
+    hi_why: reached
+    lo_why: reached
+    temp_c: 28.1
+  rj_dg_4_3:
+    urdf: [-1.5708, 1.5708]
+    measured: [-0.9948, 0.9512]
+    reach_ratio: 0.811
+    hi_why: reached
+    lo_why: reached
+    temp_c: 28.1
+  rj_dg_4_4:
+    urdf: [-1.5708, 1.5708]
+    measured: [-0.9582, 0.9582]
+    reach_ratio: 0.798
+    hi_why: reached
+    lo_why: reached
+    temp_c: 28.6
+  rj_dg_5_3:
+    urdf: [-1.5708, 1.5708]
+    measured: [-0.8482, 0.9617]
+    reach_ratio: 0.754
+    hi_why: reached
+    lo_why: reached
+    temp_c: 29.3
+  rj_dg_5_4:
+    urdf: [-1.5708, 1.5708]
+    measured: [-0.9669, 0.946]
+    reach_ratio: 0.797
+    hi_why: reached
+    lo_why: reached
+    temp_c: 28.7

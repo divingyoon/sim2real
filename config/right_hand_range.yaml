@@ -1,0 +1,145 @@
+# 테솔로 우손 실측 가동범위 (probe_hand_range.py)
+# 측정: 2026-09-01 00:47:21
+# URDF 한계가 아니라 **실제로 갈 수 있는 곳**이다. 도달 못하는 지령을 주면
+# 컨트롤러가 영원히 밀어붙여 발열한다 — sim·프로필·정책 액션에 같은 값을 쓸 것.
+joints:
+  rj_dg_1_1:
+    urdf: [-0.384, 0.8901]
+    measured: [-0.2461, 0.8692]
+    reach_ratio: 0.875
+    hi_why: reached
+    lo_why: reached
+    temp_c: 42.0
+  rj_dg_1_2:
+    urdf: [-3.1416, 0.0]
+    measured: [-1.1659, -0.0052]
+    reach_ratio: 0.967
+    hi_why: reached
+    lo_why: reached
+    temp_c: 41.8
+  rj_dg_1_3:
+    urdf: [-1.5708, 1.5708]
+    measured: [-1.1694, 1.1641]
+    reach_ratio: 0.972
+    hi_why: reached
+    lo_why: reached
+    temp_c: 40.2
+  rj_dg_1_4:
+    urdf: [-1.5708, 1.5708]
+    measured: [-1.0245, 1.0664]
+    reach_ratio: 0.871
+    hi_why: reached
+    lo_why: reached
+    temp_c: 40.2
+  rj_dg_2_1:
+    urdf: [-0.384, 0.8901]
+    measured: [-0.3526, 0.089]
+    reach_ratio: 0.347
+    hi_why: reached
+    lo_why: reached
+    temp_c: 41.2
+  rj_dg_2_2:
+    urdf: [-3.1416, 0.0]
+    measured: [-0.0559, 0.0105]
+    reach_ratio: 0.055
+    hi_why: reached
+    lo_why: reached
+    temp_c: 42.3
+  rj_dg_2_3:
+    urdf: [-1.5708, 1.5708]
+    measured: [-0.9495, 1.138]
+    reach_ratio: 0.87
+    hi_why: reached
+    lo_why: reached
+    temp_c: 42.6
+  rj_dg_2_4:
+    urdf: [-1.5708, 1.5708]
+    measured: [-1.1519, 1.1519]
+    reach_ratio: 0.96
+    hi_why: reached
+    lo_why: reached
+    temp_c: 42.7
+  rj_dg_3_1:
+    urdf: [-0.384, 0.8901]
+    measured: [-0.0768, 0.1204]
+    reach_ratio: 0.155
+    hi_why: reached
+    lo_why: reached
+    temp_c: 42.3
+  rj_dg_3_2:
+    urdf: [-3.1416, 0.0]
+    measured: [-0.0698, 0.0227]
+    reach_ratio: 0.077
+    hi_why: reached
+    lo_why: stall
+    temp_c: 44.3
+  rj_dg_3_3:
+    urdf: [-1.5708, 1.5708]
+    measured: [-1.1345, 1.1327]
+    reach_ratio: 0.945
+    hi_why: reached
+    lo_why: reached
+    temp_c: 44.2
+  rj_dg_3_4:
+    urdf: [-1.5708, 1.5708]
+    measured: [-1.1606, 1.1711]
+    reach_ratio: 0.972
+    hi_why: reached
+    lo_why: reached
+    temp_c: 43.3
+  rj_dg_4_1:
+    urdf: [-0.384, 0.8901]
+    measured: [0.1885, 0.1885]
+    reach_ratio: 0.0
+    hi_why: reached
+    lo_why: reached
+    temp_c: 43.1
+  rj_dg_4_2:
+    urdf: [-3.1416, 0.0]
+    measured: [0.0384, 0.0384]
+    reach_ratio: 0.0
+    hi_why: reached
+    lo_why: reached
+    temp_c: 42.1
+  rj_dg_4_3:
+    urdf: [-1.5708, 1.5708]
+    measured: [0.0419, 0.0419]
+    reach_ratio: 0.0
+    hi_why: reached
+    lo_why: reached
+    temp_c: 42.8
+  rj_dg_4_4:
+    urdf: [-1.5708, 1.5708]
+    measured: [0.0262, 0.0262]
+    reach_ratio: 0.0
+    hi_why: reached
+    lo_why: reached
+    temp_c: 43.1
+  rj_dg_5_1:
+    urdf: [-0.384, 0.8901]
+    measured: [-0.0367, -0.0367]
+    reach_ratio: 0.0
+    hi_why: reached
+    lo_why: reached
+    temp_c: 41.7
+  rj_dg_5_2:
+    urdf: [-3.1416, 0.0]
+    measured: [0.1274, 0.1274]
+    reach_ratio: 0.0
+    hi_why: reached
+    lo_why: reached
+    temp_c: 40.1
+  rj_dg_5_3:
+    urdf: [-1.5708, 1.5708]
+    measured: [0.0262, 0.0262]
+    reach_ratio: 0.0
+    hi_why: reached
+    lo_why: reached
+    temp_c: 41.2
+  rj_dg_5_4:
+    urdf: [-1.5708, 1.5708]
+    measured: [0.0384, 0.0384]
+    reach_ratio: 0.0
+    hi_why: reached
+    lo_why: reached
+    temp_c: 40.7
