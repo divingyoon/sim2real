@@ -146,3 +146,67 @@ def test_canonical_hand_order_would_be_caught():
 
     bad = [d.name for d in compare(built, obs, SEGMENTS) if not d.ok]
     assert "hand_q" in bad, "손 관절 순서를 틀렸는데 하네스가 못 잡았다"
+
+
+LEFT_LAYOUT = REPO / "logs" / "policy" / "left_v2B25" / "obs_layout.json"
+LEFT_PARAMS = REPO / "logs" / "policy" / "left_v2B25" / "params" / "env.yaml"
+
+
+@pytest.mark.skipif(not LEFT_LAYOUT.exists(), reason="표본이 없다")
+def test_left_builder_matches_the_recorded_env_sample():
+    """좌팔 49D 빌더 ↔ env 표본. rot6d 인터리브 규약이 여기서 잠긴다."""
+    import yaml
+    from left_obs_builder import SEGMENTS, assemble_actor_obs, quat_to_matrix
+    from robot_profile import load_hdgp_module, load_robot_profile
+
+    d = load_layout(LEFT_LAYOUT)
+    obs = np.array(d["sample_obs"])
+    st = d["state"]
+    names, bod = st["joint_names"], st["body_names"]
+    q, qd = np.array(st["joint_pos"]), np.array(st["joint_vel"])
+    bp = np.array(st["body_pos_env_local"]).reshape(-1, 3)
+    bq = np.array(st["body_quat_wxyz"]).reshape(-1, 4)
+
+    left9 = [f"l_aj_{i}" for i in range(1, 8)] + ["l_hj_gripper_1", "l_hj_gripper_2"]
+    il = [names.index(n) for n in left9]
+    jp = yaml.unsafe_load(LEFT_PARAMS.read_text())["scene"]["robot"]["init_state"]["joint_pos"]
+    q0 = np.array([jp.get(n, 0.0) for n in left9])
+
+    preset = load_hdgp_module(load_robot_profile("gripper_left"), "preset")
+    box = (preset.PALM_BOX_X, preset.PALM_BOX_Y, preset.PALM_BOX_Z)
+    gi = bod.index(preset.GRIPPER_BASE_BODY)
+    # TCP = gripper_base + R·(0,0,TCP_OFFSET_IN_BASE_Z) — 표본 실측 80 mm 와 일치.
+    tcp = bp[gi] + quat_to_matrix(bq[gi]) @ np.array([0.0, 0.0, preset.TCP_OFFSET_IN_BASE_Z])
+
+    built = assemble_actor_obs(
+        joint_pos=q[il], joint_vel=qd[il], joint_pos_default=q0,
+        joint_vel_default=np.zeros(9),
+        root_pos=np.zeros(3), root_quat=np.array([1.0, 0, 0, 0]),
+        cup_pos=np.array(st["object_pos_env_local"]),
+        cup_quat=np.array(st["object_quat_wxyz"]),
+        goal_pos=obs[21:24], goal_quat=obs[24:28],       # 목표는 표본이 스스로 담는 값
+        tcp_pos=tcp, gripper_base_pos=bp[gi], gripper_base_quat=bq[gi],
+        last_action=obs[28:35], gripper_gate=float(obs[35]),
+        palm_box=box)
+
+    diffs = compare(built, obs, SEGMENTS)
+    assert all(d.ok for d in diffs), "\n" + describe(diffs)
+
+
+@pytest.mark.skipif(not LEFT_LAYOUT.exists(), reason="표본이 없다")
+def test_left_column_stacked_rot6d_would_be_caught():
+    """★rot6d 를 열 스택으로 바꾸면 하네스가 반드시 잡아야 한다 (표본 오차 1.88)."""
+    from left_obs_builder import SEGMENTS, quat_to_matrix
+
+    d = load_layout(LEFT_LAYOUT)
+    obs = np.array(d["sample_obs"])
+    st = d["state"]
+    bod = st["body_names"]
+    bq = np.array(st["body_quat_wxyz"]).reshape(-1, 4)
+    R = quat_to_matrix(bq[bod.index("l_hl_gripper_base")])
+
+    wrong = obs.copy()
+    wrong[39:45] = np.concatenate([R[:, 0], R[:, 1]])    # ← 일부러 열 스택
+
+    bad = [x.name for x in compare(wrong, obs, SEGMENTS) if not x.ok]
+    assert "palm_rot" in bad, "rot6d 규약을 틀렸는데 하네스가 못 잡았다"

@@ -62,13 +62,16 @@ def quat_to_matrix(quat_wxyz: np.ndarray) -> np.ndarray:
 
 
 def rot6d_from_quat(quat_wxyz: np.ndarray) -> np.ndarray:
-    """회전행렬의 **앞 두 열**(6D 표현).
+    """회전행렬 앞 두 열의 **인터리브** 6D 표현: [R00,R01,R10,R11,R20,R21].
 
-    ★열이지 행이 아니다 — 행을 쓰면 전치가 되어 정책이 다른 자세를 본다.
+    ★sim 이 `matrix[:, :, :2].reshape(6)` 를 쓰므로 행우선으로 **두 열이 섞여** 나온다.
+      열을 이어붙이면([R00,R10,R20,R01,R11,R21]) 표본과 1.88 어긋난다(09.02 실측).
+    ★★우팔(grasp_s2r)은 반대로 **열 스택**이다(`cat([R[:,:,0], R[:,:,1]])`) —
+      두 env 의 rot6d 규약이 서로 다르다. 빌더를 섞어 쓰면 안 된다.
     euler 를 안 쓰는 이유는 학습 쪽 주석대로 ±π 경계에서 널뛰기 때문이다.
     """
     R = quat_to_matrix(quat_wxyz)
-    return np.concatenate([R[:, 0], R[:, 1]])
+    return R[:, :2].reshape(-1)
 
 
 def subtract_frame(
@@ -145,7 +148,7 @@ def assemble_actor_obs(
         act,
         np.array([float(gripper_gate)]),
         normalize_tcp(tcp_b, palm_box),
-        np.concatenate([base_R[:, 0], base_R[:, 1]]),
+        base_R[:, :2].reshape(-1),
         np.asarray(goal_pos, dtype=float).reshape(3) - np.asarray(cup_pos, dtype=float).reshape(3),
         np.array([cup_upright(cup_quat)]),
     ])

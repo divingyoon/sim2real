@@ -126,16 +126,18 @@ def test_normalize_tcp_is_not_clamped():
 
 
 # ── 회전 ───────────────────────────────────────────────────────────────────
-def test_rot6d_of_identity_is_the_first_two_columns():
-    assert rot6d_from_quat(IDENT) == pytest.approx([1, 0, 0, 0, 1, 0])
+def test_rot6d_of_identity_is_interleaved():
+    """★[R00,R01,R10,R11,R20,R21] — 항등이면 [1,0,0,1,0,0]. 열 스택([1,0,0,0,1,0])이 아니다."""
+    assert rot6d_from_quat(IDENT) == pytest.approx([1, 0, 0, 1, 0, 0])
 
 
-def test_rot6d_takes_columns_not_rows():
-    """행을 쓰면 전치가 되어 정책이 다른 자세를 본다."""
+def test_rot6d_is_interleaved_not_column_stacked():
+    """sim 좌팔은 `[:, :2].reshape` 라 두 열이 섞인다. 열 스택이면 표본과 1.88 어긋난다."""
     q = np.array([np.cos(np.pi / 4), 0.0, 0.0, np.sin(np.pi / 4)])   # z 축 90°
     R = quat_to_matrix(q)
 
-    assert rot6d_from_quat(q) == pytest.approx(np.concatenate([R[:, 0], R[:, 1]]))
+    assert rot6d_from_quat(q) == pytest.approx(R[:, :2].reshape(-1))
+    assert not np.allclose(rot6d_from_quat(q), np.concatenate([R[:, 0], R[:, 1]]))
 
 
 def test_quat_to_matrix_is_orthonormal():
