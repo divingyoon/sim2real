@@ -36,14 +36,25 @@ end_effector:
   dof: 1
 
 contract:
-  hdgp_package: openarm.gripper.left.grasp_sensor
-  # 36 = joint_pos 9 + joint_vel 9 + object_position 3 + object_pose command 7
-  #      + last_action 7 + gripper_gate 1.  action 7 = palm 절대 6 + 그리퍼 이진 1.
+  # ★08.31 v2 전환 — 배포 대상은 grasp_sensor_v2 의 `v2H_wide_best`(ep740, rew 98.98).
+  #   grasp_sensor 트랙(fab_test16, obs 36)에서 obs 가 13 늘었다:
+  # 49 = joint_pos 9 + joint_vel 9 + object_position_noisy 3 + object_pose command 7
+  #      + last_action 7 + gripper_gate 1 + tcp_pos 3 + palm_rot6d 6
+  #      + goal_minus_cup 3 + cup_upright 1.  action 7 = palm 절대 6 + 그리퍼 이진 1 (불변).
   # 소스에 이 숫자를 적어 둔 곳이 없어 체크포인트에서 읽어 검증한다.
-  obs_dim: 36
+  # hdgp_package 가 v2 가 아닌 이유: 프로필의 홈·preset 해석이
+  # `{package}.grasp_left_preset` 을 import 하는데, v2 는 preset 을 새로 만들지 않고
+  # v1 것을 그대로 쓴다(`v2_preset.py` 서두 — "기하·자산·홈·스폰·액션 상수는 불변").
+  hdgp_package: openarm.gripper.left.grasp_sensor
+  obs_dim: 49
   action_dim: 7
   source: checkpoint
-  checkpoint: ../hdgp/log/rl_games/open-grip/left/grasp-sensor-fab/fab_test16/nn/open-grip_l_grasp_sensor_fab.pth
+  # 08.31 재교체(사용자 지정): v2B17 → **v2E19_zfloor_ep1800**. 계약 동일(obs49/act7/MLP).
+  #   ★홈 = 런 dump(left_v2E19/params/env.yaml, arm5080 회수)가 **구 v1 홈**을 확정
+  #     (-0.0136,-0.3757,-0.0010,+0.9336,-0.4655,+0.0003,-0.3306) — J147(B17 실험홈) 아님.
+  #     따라서 리셋 궤적은 기존 reset_left.npz 그대로 유효.
+  # 이전 후보: left_v2B17/nn/(3종) · left_v2H_wide/nn/v2H_wide_best.pth
+  checkpoint: logs/policy/left_v2E19/nn/v2E19_zfloor_ep1800.pth
 
 action:
   # 절대 규약. a=0 은 "기준점 유지"가 아니라 `PALM_BOX` 의 **중심**이다 —

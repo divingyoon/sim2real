@@ -25,9 +25,33 @@ end_effector:
   dof: 20
 
 contract:
+  # ★08.31 전환 — 배포 대상은 agnostic grasp_s2r 의 `m1_final`(ep20000, LSTM 1024).
+  #   obs 155 / action 21 = palm 6D **홈 기준 델타** + 손 시너지 15 슬롯
+  #   (grasp_s2r_env.py:507,568 — 관절 6개가 아니다). state 193 은 critic 전용이라
+  #   배포에 안 나간다. LSTM hidden 도 sim 마스터 안에만 존재한다.
+  #   action_space 가 소스에서 런타임 파생(cfg 는 0)이라 체크포인트로 검증한다.
+  # ★hdgp_package 가 grasp_s2r 가 아닌 이유: 프로필의 preset 기계(idle rest·q_home
+  #   미러·fabric 대조)는 `grasp_right_preset.py` 레이아웃을 요구하고, 구 라이브
+  #   스택(grasp_policy_core 등)이 그 위에 서 있다. grasp_s2r 는 idle 좌팔 rest 를
+  #   이 preset 에서 **승계**했으므로(robot_profiles.py "grasp_sensor preset 승계")
+  #   idle 값은 정합한다.
+  # ⚠️단 `expected_q_home_arm` 은 m1 에 쓰지 마라 — grasp_s2r 우팔 rest
+  #   (0.0380,0.4012,0.6015,0.9643,0.0294,0.7060,0.4213)는 같은 palm pose 의
+  #   **다른 팔꿈치 IK 분기**다(preset 미러는 j2=0.6706). m1 의 홈 진실원천은
+  #   grasp_s2r robot_profiles.py 와 리셋 bag(bag_reset_right_both, 끝값 일치 실증).
+  # ⚠️fabric 도 m1 은 openarm_tesollo(레거시, 팔 베이스 +8mm 오차)가 아니라
+  #   `openarm_tesollo_sensor_right` + 전용 params 를 쓴다 — 라이브 fabric 해석이
+  #   필요해지면 이 프로필의 fabrics 블록이 아니라 grasp_s2r 선언을 따를 것.
   hdgp_package: openarm.tesollo.right.grasp_sensor
-  obs_dim: 154
+  obs_dim: 155
   action_dim: 21
+  source: checkpoint
+  # 08.31 교체(사용자 지정): m1_final → **b1_ep10800** (★8종 전수 파지+리프트,
+  #   512env·1024ep 프로브). 계약 동일(obs155/act21/LSTM1024). md5 fa93a20d — arm4090
+  #   s2r_b1_anylink ep_10800 과 일치(런 특정 완료, params 회수 → right_b1/params/).
+  #   ★b1 런 dump 의 r_aj 홈 = 이 트랙 robot_profiles rest 와 일치(0.0380,0.4012,…)
+  #     → m1 과 달리 홈 분기 경고 없음. m1_final 은 배포 후보로 잔류(right_m1/).
+  checkpoint: logs/policy/right_b1/nn/b1_ep10800.pth
 
 topics:
   arm_state:      /joint_states

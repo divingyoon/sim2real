@@ -52,12 +52,17 @@ class IsaacsimCmdToJtc(Node):
     def __init__(
         self,
         profile,
+        arm_offset: "list[float] | None",
         control_dt: float,
         max_vel: float,
         hand_max_vel: float,
     ) -> None:
         super().__init__("isaacsim_cmd_to_jtc")
         self.profile = profile
+        # ★정적 처짐 선보상(canonical 팔 순서, rad). 08.31 실측(probe_droop_real,
+        #   홈+frame150/250 평균)의 부호 반전값을 지령에 더한다. 게인이 낮아 실팔이
+        #   지령보다 처지는 몫을 미리 올려 보낸다 — 대역폭 지연과는 별개의 정적 성분.
+        self.arm_offset = arm_offset
         arm_topic = profile.topics["arm_traj"]
         hand_topic = profile.topics["ee_traj"]
         arm_state_topic = profile.topics["arm_state"]
@@ -118,7 +123,10 @@ class IsaacsimCmdToJtc(Node):
         self._cmd_rx[label] = time.monotonic()
 
     def _arm_cb(self, msg: Float64MultiArray) -> None:
-        self._store_target(self.arm_remap, msg.data, self.n_arm, "arm")
+        vals = list(msg.data)
+        if self.arm_offset is not None and len(vals) == len(self.arm_offset):
+            vals = [v + o for v, o in zip(vals, self.arm_offset)]
+        self._store_target(self.arm_remap, vals, self.n_arm, "arm")
 
     def _hand_cb(self, msg: Float64MultiArray) -> None:
         self._store_target(self.hand_remap, msg.data, self.n_hand, "hand")
@@ -174,12 +182,22 @@ def main() -> None:
                         help="팔 세트포인트 rate-limit [rad/s]. fabric_q 를 이 속도로 추종")
     parser.add_argument("--hand-max-vel", type=float, default=1.0,
                         help="손 세트포인트 rate-limit [rad/s]. APPROACH -1.57 도달 ~1.6s")
+    parser.add_argument("--arm-offset", type=str, default=None,
+                        help="팔 지령 선보상, canonical 순서 콤마 7값[rad]. "
+                             "probe_droop_real 의 '선보상 후보' 출력을 그대로 붙인다.")
     args = parser.parse_args()
     profile = load_robot_profile(args.robot)
 
     rclpy.init()
+    arm_offset = None
+    if args.arm_offset:
+        arm_offset = [float(x) for x in args.arm_offset.split(",")]
+        if len(arm_offset) != 7:
+            raise SystemExit(f"--arm-offset 은 7값 — 받은 {len(arm_offset)}")
+        print(f"[브리지] 팔 선보상 주입: {arm_offset}")
     node = IsaacsimCmdToJtc(
         profile=profile,
+        arm_offset=arm_offset,
         control_dt=args.control_dt,
         max_vel=args.max_vel,
         hand_max_vel=args.hand_max_vel,

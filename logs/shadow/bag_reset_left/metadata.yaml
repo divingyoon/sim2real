@@ -1,0 +1,56 @@
+rosbag2_bagfile_information:
+  version: 5
+  storage_identifier: sqlite3
+  duration:
+    nanoseconds: 29160000000
+  starting_time:
+    nanoseconds_since_epoch: 0
+  message_count: 7296
+  topics_with_message_count:
+    - topic_metadata:
+        name: /shadow/palm_cmd
+        type: geometry_msgs/msg/PoseStamped
+        serialization_format: cdr
+        offered_qos_profiles: ""
+      message_count: 1459
+    - topic_metadata:
+        name: /shadow/action
+        type: std_msgs/msg/Float64MultiArray
+        serialization_format: cdr
+        offered_qos_profiles: ""
+      message_count: 1459
+    - topic_metadata:
+        name: /shadow/step
+        type: std_msgs/msg/Int32
+        serialization_format: cdr
+        offered_qos_profiles: ""
+      message_count: 1459
+    - topic_metadata:
+        name: /left_gripper_controller/joint_trajectory
+        type: trajectory_msgs/msg/JointTrajectory
+        serialization_format: cdr
+        offered_qos_profiles: ""
+      message_count: 1459
+    - topic_metadata:
+        name: /shadow/meta
+        type: std_msgs/msg/String
+        serialization_format: cdr
+        offered_qos_profiles: ""
+      message_count: 1
+    - topic_metadata:
+        name: /left_joint_trajectory_controller/joint_trajectory
+        type: trajectory_msgs/msg/JointTrajectory
+        serialization_format: cdr
+        offered_qos_profiles: ""
+      message_count: 1459
+  compression_format: ""
+  compression_mode: ""
+  relative_file_paths:
+    - bag_reset_left_0.db3
+  files:
+    - path: bag_reset_left_0.db3
+      starting_time:
+        nanoseconds_since_epoch: 0
+      duration:
+        nanoseconds: 29160000000
+      message_count: 7296

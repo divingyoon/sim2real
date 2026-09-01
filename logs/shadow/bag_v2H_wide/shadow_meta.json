@@ -1,0 +1,148 @@
+{
+  "robot_profile": "gripper_left",
+  "arm_topic": "/left_joint_trajectory_controller/joint_trajectory",
+  "gripper_topic": "/left_gripper_controller/joint_trajectory",
+  "arm_joint_names": [
+    "openarm_left_joint1",
+    "openarm_left_joint2",
+    "openarm_left_joint3",
+    "openarm_left_joint4",
+    "openarm_left_joint5",
+    "openarm_left_joint6",
+    "openarm_left_joint7"
+  ],
+  "gripper_joint_names": [
+    "openarm_left_finger_joint1"
+  ],
+  "canonical_to_source": {
+    "l_aj_1": "openarm_left_joint1",
+    "l_aj_2": "openarm_left_joint2",
+    "l_aj_3": "openarm_left_joint3",
+    "l_aj_4": "openarm_left_joint4",
+    "l_aj_5": "openarm_left_joint5",
+    "l_aj_6": "openarm_left_joint6",
+    "l_aj_7": "openarm_left_joint7",
+    "l_hj_gripper_1": "openarm_left_finger_joint1"
+  },
+  "dropped_mimic": [
+    "l_hj_gripper_2"
+  ],
+  "publish_dt": 0.03773584905660377,
+  "source_step_dt": 0.02,
+  "rate_scale": 0.53,
+  "n_frames": 1500,
+  "first_frame": {
+    "arm": {
+      "openarm_left_joint1": -0.0072999997064471245,
+      "openarm_left_joint2": -0.3734658360481262,
+      "openarm_left_joint3": 0.0032995271030813456,
+      "openarm_left_joint4": 0.9308295249938965,
+      "openarm_left_joint5": -0.4647550880908966,
+      "openarm_left_joint6": -0.003714549820870161,
+      "openarm_left_joint7": -0.3281683921813965
+    },
+    "gripper": {
+      "openarm_left_finger_joint1": 0.04399999976158142
+    }
+  },
+  "clamped": {
+    "openarm_left_joint1": 0,
+    "openarm_left_joint2": 0,
+    "openarm_left_joint3": 0,
+    "openarm_left_joint4": 0,
+    "openarm_left_joint5": 0,
+    "openarm_left_joint6": 0,
+    "openarm_left_joint7": 0
+  },
+  "time_from_start": 0.0,
+  "interpolation_assumption": "none",
+  "recording_meta": {
+    "meta_joint_names": [
+      "l_aj_1",
+      "l_aj_2",
+      "l_aj_3",
+      "l_aj_4",
+      "l_aj_5",
+      "l_aj_6",
+      "l_aj_7"
+    ],
+    "meta_grip_names": [
+      "l_hj_gripper_1",
+      "l_hj_gripper_2"
+    ],
+    "meta_step_dt": [
+      0.02
+    ],
+    "meta_gravity_comp": [
+      "on"
+    ],
+    "meta_gravity_comp_requested": [
+      "on"
+    ],
+    "meta_arm_group": [
+      "left_arm"
+    ],
+    "meta_arm_stiffness": [
+      300.0
+    ],
+    "meta_arm_damping": [
+      45.0
+    ],
+    "meta_checkpoint": [
+      "/home/user/rl_ws/sim2real/logs/policy/left_v2H_wide/nn/v2H_wide_best.pth"
+    ],
+    "meta_fabrics": [
+      "/home/user/rl_ws/hdgp/source/FABRICS/src/fabrics_sim/__init__.py"
+    ],
+    "meta_task_sha256": [
+      "__init__.py:55d98f8f7b84",
+      "_vendored_lift_openarm_env_cfg.py:83dc013f3942",
+      "grasp_left_actions.py:995e4713e7f2",
+      "grasp_left_env_cfg.py:80c738b1dc87",
+      "grasp_left_events.py:b3165981e9af",
+      "grasp_left_fab_env_cfg.py:872a789fddcc",
+      "grasp_left_fabric_action.py:c945de5870a0",
+      "grasp_left_ik_env_cfg.py:1374d5d8fdbe",
+      "grasp_left_observations.py:637542fc3d7e",
+      "grasp_left_preset.py:da8c111308cf",
+      "grasp_left_rewards.py:ca63610e8958"
+    ],
+    "meta_cup_pose_source": [
+      "env 무작위 스폰"
+    ],
+    "meta_fabric_dt": [
+      0.02
+    ],
+    "meta_fabric_decimation": [
+      2
+    ],
+    "meta_fabric_damping": [
+      10.0
+    ],
+    "meta_fabric_vel_ff": [
+      1.0
+    ],
+    "meta_home_q": [
+      -0.01360000018030405,
+      -0.3756999969482422,
+      -0.0010000000474974513,
+      0.9336000084877014,
+      -0.46549999713897705,
+      0.0003000000142492354,
+      -0.33059999346733093
+    ],
+    "meta_obs_dim": [
+      49
+    ],
+    "meta_is_rnn": [
+      "no"
+    ],
+    "meta_fabric_robot_dir": [
+      "openarm_tesollo_sensor_left_gripper"
+    ],
+    "meta_fabric_world": [
+      "open_gripper_left_boxes_no_table"
+    ],
+    "env_index": null
+  }
+}

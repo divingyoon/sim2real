@@ -15,3 +15,10 @@ vendor/openarm/openarm_teleop/
 
 # 구운 rosbag2 (npz 에서 action_bag.py 로 언제든 재생성 — 커밋하지 않는다)
 logs/shadow/*.bag/
+
+# rosbag2 원본 (수백 MB~GB). 판정 결과는 docs/ 와 분석 CSV 로 남는다
+logs/rosbags/
+logs/shadow/rosbags/
+
+# 정책 체크포인트 바이너리 — 진실원천은 hdgp/log/. 여기엔 params dump 와 README 만 둔다
+logs/policy/**/*.pth

@@ -1,0 +1,11 @@
+# rosbag2 QoS override — 손 실측을 놓치지 않기 위해.
+#
+# `/dg5f_right/joint_states` 에는 발행자가 둘이다: robot_state_publisher 쪽의
+# TRANSIENT_LOCAL/RELIABLE(래치 1개)와 broadcaster 의 **BEST_EFFORT/VOLATILE 100 Hz 스트림**.
+# rosbag2 는 기본 RELIABLE 로 구독하는데, RELIABLE 구독자는 BEST_EFFORT 발행자와
+# 매칭되지 않는다 → 래치 1개만 담기고 스트림은 통째로 사라진다(08.31 실측: 1 메시지).
+/dg5f_right/joint_states:
+  reliability: best_effort
+  durability: volatile
+  history: keep_last
+  depth: 200

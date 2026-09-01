@@ -51,7 +51,8 @@ ABORT_TRACKING_ERR_RAD = 0.30
 #  **없는 장애물**을 피하고 **있는 팔**은 피하지 않는다. 값은 `grasp_inference` 와 같다 —
 #  중력 처짐(예측 수십 mrad)은 통과시키고 자세가 다른 경우만 잡는 폭이다.
 IDLE_ARM_MISMATCH_RAD = 0.15
-ABORT_EFFORT_NM = {"l_aj_5": 5.0, "l_aj_6": 5.0, "l_aj_7": 5.0}
+ABORT_EFFORT_NM = {"l_aj_5": 5.0, "l_aj_6": 5.0, "l_aj_7": 5.0,
+                   "r_aj_5": 5.0, "r_aj_6": 5.0, "r_aj_7": 5.0}
 ABORT_STATE_STALE_SEC = 1.0
 
 
@@ -84,7 +85,8 @@ def idle_arm_offenders(measured, rest, names, tolerance):
     ]
 
 
-def build_plan(source: Path | dict, rate_scale: float, profile) -> ReplayPlan:
+def build_plan(source: Path | dict, rate_scale: float, profile,
+               arm_only: bool = False, multi_dof_hand: bool = False) -> ReplayPlan:
     """npz 경로 또는 이미 읽힌 기록 dict(백 되읽기 결과)를 받는다.
 
     백은 드라이버 계약(source 관절)으로 적혀 있지만 `action_bag_read.read_bag` 이
@@ -96,6 +98,34 @@ def build_plan(source: Path | dict, rate_scale: float, profile) -> ReplayPlan:
         raise SystemExit(
             f"기록의 팔 관절 순서가 프로필과 다르다\n  기록 {joint_names}\n"
             f"  프로필 {list(profile.arm_canonical)}"
+        )
+    if multi_dof_hand:
+        # ★다지 손(우 DG-5F 20관절): 1-jaw 가정을 쓰지 않고 **전 채널**을 그대로 싣는다.
+        grip_names = [str(x) for x in data["meta_grip_names"]]
+        if tuple(grip_names) != tuple(profile.ee_canonical):
+            raise SystemExit(
+                f"손 관절 순서가 프로필과 다르다\n  기록 {grip_names}\n"
+                f"  프로필 {list(profile.ee_canonical)}")
+        plan = ReplayPlan(
+            arm_target=data["arm_target"][:, 0],
+            grip_target=np.zeros(data["arm_target"].shape[0]),
+            step_dt=float(data["meta_step_dt"][0]),
+            rate_scale=rate_scale,
+            joint_names=joint_names,
+            gripper_name="",
+        )
+        plan.hand_target = data["grip_cmd"][:, 0].astype(float)
+        return plan
+    if arm_only:
+        # ★손·그리퍼를 아예 발행하지 않는 재생. 손 전원이 없거나(테솔로 무전원)
+        #   손 채널 차원이 이 재생기의 1-jaw 가정과 다를 때 쓴다.
+        return ReplayPlan(
+            arm_target=data["arm_target"][:, 0],
+            grip_target=np.zeros(data["arm_target"].shape[0]),
+            step_dt=float(data["meta_step_dt"][0]),
+            rate_scale=rate_scale,
+            joint_names=joint_names,
+            gripper_name="",
         )
     grip_names = [str(x) for x in data["meta_grip_names"]]
     if profile.ee_canonical[0] not in grip_names:
@@ -161,6 +191,21 @@ def main() -> int:
                         help="유휴 팔이 rest 밖이어도 시작한다. fabric world 가 그 팔을 "
                              "고정 위치의 구로 세워 두므로, 켜기 전에 실제 우팔이 어디 "
                              "있는지 눈으로 확인할 것.")
+    parser.add_argument("--abort-tracking-err", type=float,
+                        default=ABORT_TRACKING_ERR_RAD,
+                        help="세트포인트 대비 추종오차 중단 임계[rad]. 무전원 손이 달린 "
+                             "팔은 정적 처짐이 0.3 rad 에 이르므로 올려야 복귀가 가능하다. "
+                             "effort 캡은 그대로 남아 실충돌은 잡는다.")
+    parser.add_argument("--publish-shadow", action="store_true",
+                        help="재생 중 sim 쪽 진실(기록의 지령·실측)을 /shadow/* 로 발행한다. "
+                             "rosbag 하나에 SIM(지령·실측) + REAL(joint_states) 이 같은 "
+                             "시계로 담겨 real2sim 튜닝 입력이 된다. 좌팔 라이브(run6)와 동형.")
+    parser.add_argument("--with-hand", action="store_true",
+                        help="다지 손(우 DG-5F 20관절)을 팔과 **같은 타임라인**으로 함께 발행한다. "
+                             "손 전원·드라이버가 살아 있을 때만. 없으면 --arm-only 를 쓸 것.")
+    parser.add_argument("--arm-only", action="store_true",
+                        help="팔 7관절만 발행한다 — 그리퍼/손 채널은 계획·발행 모두 생략. "
+                             "손 전원이 없는 우팔 검증용.")
     parser.add_argument("--execute", action="store_true",
                         help="이것 없으면 계획만 출력하고 아무것도 발행하지 않는다")
     args = parser.parse_args()
@@ -176,7 +221,22 @@ def main() -> int:
                   f"{args.rate_scale} 무시하고 1.0 으로 재생한다.")
     else:
         source, rate_scale, label = args.sim, args.rate_scale, args.sim.name
-    plan = build_plan(source, rate_scale, profile)
+    if args.with_hand and args.arm_only:
+        raise SystemExit("--with-hand 와 --arm-only 는 함께 쓸 수 없다")
+    plan = build_plan(source, rate_scale, profile, arm_only=args.arm_only,
+                      multi_dof_hand=args.with_hand)
+    # ★sim 실측(q_meas)은 npz 에만 있고 ReplayPlan 에는 없다 — 발행하려면 여기서 읽는다.
+    sim_meas = None
+    if args.publish_shadow:
+        if args.bag is not None:
+            print("⚠ --bag 은 sim 실측을 담지 않는다 — /shadow/sim_meas 는 발행하지 않는다")
+        else:
+            _npz = np.load(args.sim, allow_pickle=False)
+            if "q_meas" in _npz:
+                sim_meas = _npz["q_meas"].astype(float)
+            else:
+                print("⚠ 기록에 q_meas 가 없다 — /shadow/sim_meas 생략")
+    source_hand = getattr(plan, "hand_target", None)
     if args.frames > 0:
         plan = ReplayPlan(
             arm_target=plan.arm_target[: args.frames],
@@ -184,6 +244,8 @@ def main() -> int:
             step_dt=plan.step_dt, rate_scale=plan.rate_scale,
             joint_names=plan.joint_names, gripper_name=plan.gripper_name,
         )
+        if args.with_hand:
+            plan.hand_target = source_hand[: args.frames]
 
     print(f"구성 {profile.name}  ·  기록 {label}")
     print(describe(plan, profile, max_vel=args.max_vel))
@@ -205,15 +267,30 @@ def main() -> int:
             self.profile = profile
             self.arm_remap = JointRemap(
                 list(plan.joint_names), list(profile.arm_source), profile.joint_limits)
-            self.grip_remap = JointRemap(
+            self.hand_remap = JointRemap(
+                list(profile.ee_canonical), list(profile.ee_source),
+                profile.joint_limits) if args.with_hand else None
+            self.grip_remap = None if (args.arm_only or args.with_hand) else JointRemap(
                 [plan.gripper_name], list(profile.ee_source), profile.joint_limits)
             self.arm_pub = self.create_publisher(
                 Float64MultiArray, profile.topics["arm_cmd"], 10)
-            self.grip_pub = self.create_publisher(Float64, profile.topics["ee_cmd"], 10)
+            self.grip_pub = None if (args.arm_only or args.with_hand) else \
+                self.create_publisher(Float64, profile.topics["ee_cmd"], 10)
+            self.hand_pub = self.create_publisher(
+                Float64MultiArray, profile.topics["ee_cmd"], 10) if args.with_hand else None
             self.arm_traj = self.create_publisher(
                 JointTrajectory, profile.topics["arm_traj"], 10)
-            self.grip_traj = self.create_publisher(
+            self.grip_traj = None if args.arm_only else self.create_publisher(
                 JointTrajectory, profile.topics["ee_traj"], 10)
+            self.hand_setpoint: np.ndarray | None = None
+            self.shadow_target = self.create_publisher(
+                Float64MultiArray, "/shadow/sim_target", 10) if args.publish_shadow else None
+            self.shadow_meas = self.create_publisher(
+                Float64MultiArray, "/shadow/sim_meas", 10) if (
+                    args.publish_shadow and sim_meas is not None) else None
+            self.shadow_hand = self.create_publisher(
+                Float64MultiArray, "/shadow/sim_hand", 10) if (
+                    args.publish_shadow and args.with_hand) else None
             self.create_subscription(JointState, profile.topics["arm_state"],
                                      self._state_cb, qos_profile_sensor_data)
 
@@ -314,10 +391,14 @@ def main() -> int:
             if now - self.last_state > ABORT_STATE_STALE_SEC:
                 return self._abort(f"상태 두절 {now - self.last_state:.2f} s")
 
+            hand_all = getattr(self.plan, "hand_target", None)
             in_ramp = self.cursor < len(self.ramp)
             if in_ramp:
                 target = self.ramp[self.cursor]
                 grip = float(self.plan.grip_target[0])
+                # ★램프 구간에서도 손은 **기록 첫 프레임**을 유지한다. 실기 손은 이미
+                #   그 자세(bringup 주먹)에 있다는 것이 이 재생의 전제다.
+                hand = hand_all[0] if hand_all is not None else None
                 step_idx = -1
             else:
                 frame = self.cursor - len(self.ramp)
@@ -325,12 +406,13 @@ def main() -> int:
                     return self._finish("완료")
                 target = self.plan.arm_target[frame]
                 grip = float(self.plan.grip_target[frame])
+                hand = hand_all[frame] if hand_all is not None else None
                 step_idx = frame
 
             # ★기록 target 이 아니라 **직전에 보낸 세트포인트** 대비로 판정한다.
             offenders = tracking_offenders(
                 self.measured, self.setpoint, self.plan.joint_names,
-                ABORT_TRACKING_ERR_RAD)
+                args.abort_tracking_err)
             if offenders:
                 name, error = max(offenders, key=lambda item: item[1])
                 return self._abort(f"{name} 이 보낸 세트포인트를 {error:.3f} rad 뒤처진다")
@@ -347,7 +429,25 @@ def main() -> int:
 
             self.setpoint = velocity_limited_target(
                 target, self.setpoint, args.max_vel, self.plan.publish_dt)
-            self._publish(self.setpoint, grip)
+            if hand is not None:
+                # 손도 세트포인트 전진으로 속도 상한을 건다 — 팔과 같은 규약.
+                base = self.hand_setpoint if self.hand_setpoint is not None else hand
+                self.hand_setpoint = velocity_limited_target(
+                    hand, base, args.max_vel, self.plan.publish_dt)
+            self._publish(self.setpoint, grip, self.hand_setpoint)
+            if self.shadow_target is not None:
+                # ★기록의 **원본 프레임**을 낸다(우리가 리미터로 붙잡은 세트포인트가 아니라).
+                #   그래야 bag 에서 "sim 이 원한 것 / 우리가 보낸 것 / 실기가 간 것" 셋이
+                #   구분된다 — 셋을 뭉개면 추종 실패의 원인을 못 가른다.
+                f = max(0, step_idx)
+                self.shadow_target.publish(Float64MultiArray(
+                    data=[float(v) for v in self.plan.arm_target[f]]))
+                if self.shadow_meas is not None:
+                    self.shadow_meas.publish(Float64MultiArray(
+                        data=[float(v) for v in sim_meas[f]]))
+                if self.shadow_hand is not None and hand_all is not None:
+                    self.shadow_hand.publish(Float64MultiArray(
+                        data=[float(v) for v in hand_all[f]]))
             self.rows.append({
                 "t_send": now, "step_idx": step_idx,
                 # ★리포트가 배속을 스스로 알아야 한다. 없으면 기록의 step_dt 를 쓰게 되고
@@ -363,11 +463,20 @@ def main() -> int:
             })
             self.cursor += 1
 
-        def _publish(self, arm: np.ndarray, grip: float) -> None:
+        def _publish(self, arm: np.ndarray, grip: float,
+                     hand: np.ndarray | None = None) -> None:
             self.arm_pub.publish(Float64MultiArray(data=[float(v) for v in arm]))
-            self.grip_pub.publish(Float64(data=grip))
             self.arm_traj.publish(self._traj(
                 list(self.profile.arm_source), self.arm_remap.apply(arm)))
+            if args.arm_only:
+                return
+            if hand is not None:
+                self.hand_pub.publish(
+                    Float64MultiArray(data=[float(v) for v in hand]))
+                self.grip_traj.publish(self._traj(
+                    list(self.profile.ee_source), self.hand_remap.apply(hand)))
+                return
+            self.grip_pub.publish(Float64(data=grip))
             self.grip_traj.publish(self._traj(
                 list(self.profile.ee_source), self.grip_remap.apply(np.array([grip]))))
 
