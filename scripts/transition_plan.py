@@ -75,13 +75,20 @@ def describe_transition(
     worst: Mapping[str, tuple[int, float]],
     min_z: Mapping[str, float],
     table_z: float,
+    baseline_z: Mapping[str, float] | None = None,
 ) -> str:
-    """전환 하나의 판정문. `worst` = 몸통 → (최악 프레임, 그때 힘[N])."""
+    """전환 하나의 판정문. `worst` = 몸통 → (최악 프레임, 그때 힘[N]).
+
+    `baseline_z` 를 주면 **시작부터 작업면 아래에 있던 링크는 세지 않는다** — 베이스와
+    몸통은 구조상 z=0 이라 그것을 침범으로 세면 무엇을 해도 실패한다.
+    """
     n = path.shape[0]
     # 이동 시간은 **구간 수**×dt 다. 프레임 수로 재면 한 스텝만큼 부풀려진다.
     lines = [f"[{label}] 프레임 {n} · {(n - 1) * dt:.1f} s · 최대 |Δq| "
              f"{float(np.abs(path[-1] - path[0]).max()):.3f} rad"]
-    low = {k: v for k, v in min_z.items() if v < table_z - TABLE_CLEARANCE_M}
+    base = baseline_z or {}
+    low = {k: v for k, v in min_z.items()
+           if v < table_z - TABLE_CLEARANCE_M and base.get(k, table_z) >= table_z}
     if worst:
         lines.append(f"  ❌ 새로 닿은 몸통 {len(worst)}개:")
         for name, (frame, force) in sorted(worst.items(), key=lambda kv: -kv[1][1]):

@@ -6,23 +6,24 @@
     "min_z": {
       "body_root": 0.0,
       "body_link": 0.0,
-      "r_hl_pinky_3": 0.3261,
-      "r_hl_middle_tip": 0.3266,
-      "r_hl_ring_tip": 0.3278
+      "r_hl_middle_tip": 0.3244,
+      "r_hl_ring_tip": 0.328,
+      "r_hl_ring_4": 0.3293
     }
   },
   "l_aj": {
     "frames": 130,
     "seconds": 2.15,
     "new_contacts": {
-      "l_hl_gripper_base": [
-        100,
-        83.93
-      ],
-      "l_hl_gripper_left_finger": [
-        128,
-        142.25
-      ]
+      "l_hl_gripper_base": {
+        "frame": 100,
+        "N": 83.93,
+        "pos_env_local": [
+          0.3192,
+          0.1369,
+          0.3513
+        ]
+      }
     },
     "min_z": {
       "body_root": 0.0,
@@ -31,6 +32,14 @@
       "l_hl_gripper_right_finger": 0.3376,
       "l_hl_gripper_left_finger": 0.339
     }
+  },
+  "reference": {
+    "left_target_cup_pos_env_local": [
+      0.2904,
+      0.029,
+      0.3238
+    ],
+    "table_surface_z": 0.2
   },
   "verdict": "fail",
   "order": "right_first"

@@ -111,9 +111,19 @@ def test_describe_transition_names_the_bodies_that_newly_touch():
     assert "통과" not in text
 
 
+def test_describe_transition_ignores_links_that_started_below_the_table():
+    """베이스·몸통은 구조상 작업면 아래에 있다 — 그것을 침범으로 세면 매번 실패한다."""
+    text = describe_transition("우팔", ramp([0.0], [0.5], max_vel=0.5, dt=0.1),
+                               dt=0.1, worst={}, min_z={"body_root": 0.0}, table_z=0.2,
+                               baseline_z={"body_root": 0.0})
+
+    assert "통과" in text
+
+
 def test_describe_transition_flags_a_link_below_the_table():
     text = describe_transition("좌팔", ramp([0.0], [0.5], max_vel=0.5, dt=0.1),
-                               dt=0.1, worst={}, min_z={"l_link": 0.18}, table_z=0.2)
+                               dt=0.1, worst={}, min_z={"l_link": 0.18}, table_z=0.2,
+                               baseline_z={"l_link": 0.30})
 
     assert "작업면" in text
     assert "l_link" in text
