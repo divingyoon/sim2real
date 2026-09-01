@@ -1,0 +1,42 @@
+{
+  "_설명": "l팔 정책 종료 상태 — 실측(q)과 PD 지령(target). 지령이 파지력이다",
+  "_task": "open-grip_l_grasp_sensor_v2-play",
+  "_checkpoint": "/home/user/rl_ws/sim2real/logs/policy/left_v2B25/nn/v2B25_tip30_ep2150.pth",
+  "_cup_dz": 0.1384,
+  "l_aj": [
+    -0.15019,
+    -0.19967,
+    0.15107,
+    0.81758,
+    -0.36695,
+    0.12184,
+    -0.14655
+  ],
+  "l_aj_target": [
+    -0.26668,
+    -0.24333,
+    0.13373,
+    0.9479,
+    -0.3257,
+    0.10539,
+    -0.3563
+  ],
+  "l_hj_gripper": [
+    0.02333,
+    0.02486
+  ],
+  "l_hj_gripper_target": [
+    0.0,
+    0.0
+  ],
+  "cup_in_hand": [
+    0.15864,
+    0.00769,
+    0.03774,
+    0.007,
+    0.85903,
+    0.02129,
+    0.51144
+  ],
+  "hand_body": "l_hl_gripper_base"
+}
