@@ -1390,3 +1390,18 @@ cd /home/user/rl_ws/sim2real
 git add docs/superpowers/plans/2026-09-03-fpp-perception-nodes.md
 git commit -m "docs: FP++ 인지 노드 통합 검증 기록"
 ```
+
+## 검증 기록 (2026-09-03)
+
+- 배포: vision-3090 ← git bundle(feat/grasp-v1-live-policy, 7de58e9). 두 PC origin 이 달라 GitHub 미경유.
+  vision 의 미커밋 extrinsics 는 로컬 커밋과 동일해 stash 후 pull, 값(0.0674838252) 보존 확인.
+- `perception_ctl.py start shaker_closed --viewer` → 약 50 s 뒤 `fpp_shaker_closed Up`, `/objects/shaker_closed/pose`
+  frame_id base_link, z **0.326**(09.03 기준선 0.322, shaker 재배치 포함). vision 모니터에 "head view" 창(xwininfo 확인).
+- `start shaker_closed cup_big_s100` → 컨테이너 2, 두 pose 모두 수신(0.02/0.07 s). `stop` → 컨테이너 0, 카메라 유지.
+- 발견·수정 2건: ① CLI 가 `--viewer` 없으면 `viewer:false` 를 보내 뷰어를 내렸다 → 키 생략(7de58e9).
+  ② 뷰어가 SIGTERM 에 안 죽었다(rclpy 가 SIGTERM 을 가로채고 waitKey 루프는 rclpy.ok 를 안 봄) →
+  루프 조건 + viewer_down.sh SIGKILL 승급. 재검증: `viewer off` 가 "viewer down"(정상 종료), 플래그 없는 start "변경 없음".
+- 테스트: `python3 -m pytest scripts/test_object_registry.py scripts/test_perception_launcher_core.py
+  scripts/test_object_pose_node.py scripts/test_perception_ctl.py scripts/test_cup_pose_relay.py` → 34 passed.
+- 운영 메모: pkill 자기매칭 — vision 스크립트는 반드시 경로로만 호출(ssh 명령줄에 패턴 문자열 금지).
+  status 의 pose_age 는 컨테이너가 내려간 뒤에도 "마지막 수신 후 경과"로 계속 커진다(의도).
