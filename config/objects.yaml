@@ -1,0 +1,38 @@
+# 물체 레지스트리 — FP++ 인지 서브시스템의 진실원천 (2026-09-03).
+# 이름 = sim 물체 이름(cup_pose_stub.json 의 "물체"). FP++ 노드 yaml 은 여기서 생성한다.
+# ★FP++ 메시는 sim 자산 메시와 같은 물체여야 한다 (shaker 09.03 교훈: 조립본 CAD 는 z 파묻힘).
+camera_extrinsics: config/global_camera_extrinsics.yaml   # camera: 블록만 공유, cad_to_body 는 아래 항목이 이긴다
+objects:
+  shaker_closed:
+    real: "파란 열린 shaker (무광, 뚜껑 없음)"
+    fpp:
+      mesh_path: assets/meshes/shaker_sim.ply     # hdgp/scripts/tools/export_shaker_sim_mesh.py 산출
+      mesh_scale_to_meters: 1.0
+      cup_class_id: 41
+      detection_pick: blue
+      yolo_confidence: 0.35
+    cad_to_body:
+      position: [0.0, 0.0, 0.0]
+      orientation_wxyz: [1.0, 0.0, 0.0, 0.0]
+    sim:
+      usd: hdgp/assets/cup/shaker_closed_rl.usd
+      origin_above_bottom_m: 0.0921
+    aabb: [[-0.044, -0.044, -0.0921], [0.044, 0.044, 0.0829]]    # 물체 프레임, 뷰어 3D 박스용
+  cup_big_s100:
+    real: "빨간 컵"
+    fpp:
+      mesh_path: assets/meshes/cup.obj
+      mesh_scale_to_meters: 1.0
+      cup_class_id: 41
+      detection_pick: red
+      yolo_confidence: 0.15
+    cad_to_body:
+      position: [0.0, 0.0, 0.0]
+      orientation_wxyz: [0.707107, 0.707107, 0.0, 0.0]   # cup.obj Y-up → sim Z-up
+    sim:
+      usd: hdgp/assets/cup/cup_big_rl.usd
+      origin_above_bottom_m: 0.0773
+    aabb: [[-0.0463, -0.0773, -0.044], [0.0437, 0.1003, 0.046]]   # CAD(Y-up) 프레임 AABB
+aliases:
+  cup_big_s080: cup_big_s100     # sim 스케일 변형 — 실물은 하나
+  cup_big_s120: cup_big_s100
