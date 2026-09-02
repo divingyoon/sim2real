@@ -24,17 +24,21 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image
 
+from object_registry import input_topic, load_registry, output_topic
+
 STALE_SEC = 1.5
-#: 메시 AABB (m, 오브젝트 프레임) — 3D bounding box 투영용 (mesh 실측 09.02)
-AABB = {
-    "cup": ((-0.0463, -0.0773, -0.044), (0.0437, 0.1003, 0.046)),
-    "shaker": ((-0.046, -0.046, 0.0), (0.046, 0.046, 0.238)),
-}
-#: (라벨, 카메라프레임 pose 토픽, base 프레임 relay 토픽, BGR 색)
-OBJECTS = (
-    ("cup", "/perception_plus_plus/cup/pose", "/cup_pose", (0, 0, 255)),
-    ("shaker", "/perception_plus_plus/shaker/pose", "/shaker_pose", (255, 200, 0)),
-)
+_COLORS = ((0, 0, 255), (255, 200, 0), (0, 255, 0), (255, 0, 255))
+
+
+def objects_from_registry(names: list[str]) -> list[tuple]:
+    """(이름, 카메라프레임 pose 토픽, base 프레임 토픽, BGR 색, AABB) — 레지스트리에서."""
+    reg = load_registry()
+    out = []
+    for i, raw in enumerate(names):
+        spec = reg.get(raw)
+        out.append((spec.name, input_topic(spec.name), output_topic(spec.name),
+                    _COLORS[i % len(_COLORS)], spec.aabb))
+    return out
 _BOX_EDGES = ((0, 1), (0, 2), (0, 4), (1, 3), (1, 5), (2, 3), (2, 6),
               (3, 7), (4, 5), (4, 6), (5, 7), (6, 7))
 
@@ -64,8 +68,9 @@ def draw_box(bgr, K, pose, aabb, color) -> None:
 
 
 class View(Node):
-    def __init__(self, compressed: bool = False) -> None:
+    def __init__(self, objects: list[tuple], compressed: bool = False) -> None:
         super().__init__("cup_view_stream")
+        self.objects = objects
         self.lock = threading.Lock()
         self.frame: np.ndarray | None = None
         self.K: np.ndarray | None = None
@@ -84,7 +89,7 @@ class View(Node):
                 Image, "/camera/camera/color/image_raw", self._img, 5)
         self.create_subscription(
             CameraInfo, "/camera/camera/color/camera_info", self._info, 5)
-        for name, cam_t, base_t, _ in OBJECTS:
+        for name, cam_t, base_t, _, _ in self.objects:
             self.create_subscription(
                 PoseStamped, cam_t,
                 lambda m, n=name: self._pose(self.cam, n, m), 10)
@@ -113,7 +118,7 @@ class View(Node):
     def _draw(self, bgr: np.ndarray) -> None:
         now = time.monotonic()
         y0 = 26
-        for name, _, _, color in OBJECTS:
+        for name, _, _, color, aabb in self.objects:
             cam = self.cam.get(name)
             base = self.base.get(name)
             fresh = cam is not None and now - cam[1] < STALE_SEC
@@ -123,7 +128,7 @@ class View(Node):
                     uv = self.K @ np.array([p.x / p.z, p.y / p.z, 1.0])
                     u, v = int(uv[0]), int(uv[1])
                     cv2.drawMarker(bgr, (u, v), color, cv2.MARKER_CROSS, 20, 2)
-                    draw_box(bgr, self.K, cam[0].pose, AABB[name], color)
+                    draw_box(bgr, self.K, cam[0].pose, aabb, color)
             if base is not None and now - base[1] < STALE_SEC:
                 q = base[0].pose.position
                 txt = f"{name}: base ({q.x:+.3f}, {q.y:+.3f}, {q.z:+.3f})"
@@ -181,9 +186,10 @@ def main() -> None:
     ap.add_argument("--show", action="store_true", help="로컬 모니터에도 창 표시 (DISPLAY 필요)")
     ap.add_argument("--compressed", action="store_true",
                     help="압축 이미지 토픽 구독 — 호스트에서 비압축이 DDS 유실될 때")
+    ap.add_argument("--objects", nargs="+", required=True, help="레지스트리 물체 이름(config/objects.yaml)")
     args = ap.parse_args()
     rclpy.init()
-    view = View(compressed=args.compressed)
+    view = View(objects_from_registry(args.objects), compressed=args.compressed)
     threading.Thread(target=rclpy.spin, args=(view,), daemon=True).start()
     server = ThreadingHTTPServer((args.bind, args.port), make_handler(view))
     print(f"MJPEG http://{args.bind}:{args.port} — 2물체 오버레이", flush=True)
