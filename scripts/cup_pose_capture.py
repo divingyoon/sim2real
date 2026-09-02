@@ -84,6 +84,26 @@ def _preset():
     return module
 
 
+#: 배포본 기준 스폰 상자 (09.02 갱신). `spawn_box_from_preset` 는 좌 v1 기준이라
+#: 낡았다 — 배포 정책의 학습 분포는 아래가 진실이다.
+#:   left  = v2B25 ADR 최대 상자 (v2_preset.ADR_SPAWN_BOX_MAX, 절대 x_lo,x_hi,y_lo,y_hi)
+#:           z = shaker 정착 실측 0.292 (env_rigid 테이블)
+#:   right = g1/E1 spawn center (0.362,-0.16) ± adr_spawn_range_max 0.05
+#:           (grasp_s2r robot_profiles + g1 dump) · z = cup_big 정착 실측 0.282
+DEPLOY_SPAWN_BOXES = {
+    "left": SpawnBox(x=(0.330, 0.390), y=(0.122, 0.295), z=0.292),
+    "right": SpawnBox(x=(0.362 - 0.05, 0.362 + 0.05),
+                      y=(-0.16 - 0.05, -0.16 + 0.05), z=0.282),
+}
+
+
+def spawn_box_for_side(side: str) -> SpawnBox:
+    """배포 정책(좌 v2B25 · 우 g1)의 학습 스폰 상자."""
+    if side not in DEPLOY_SPAWN_BOXES:
+        raise ValueError(f"side 는 left/right 여야 한다: {side!r}")
+    return DEPLOY_SPAWN_BOXES[side]
+
+
 def spawn_box_from_preset(preset=None) -> SpawnBox:
     """학습 스폰 상자를 preset 에서 유도한다 — 숫자를 여기 적지 않는다."""
     p = preset if preset is not None else _preset()
@@ -134,13 +154,16 @@ def main() -> int:
     parser.add_argument("--out", type=Path, help="붙잡아 저장할 경로")
     parser.add_argument("--topic", default="/cup_pose")
     parser.add_argument("--frame", default="base_link")
+    parser.add_argument("--side", choices=("left", "right"), default=None,
+                        help="배포 스폰 상자 선택 (좌 v2B25 · 우 g1). 생략 시 구 v1 preset")
     parser.add_argument("--samples", type=int, default=30,
                         help="이만큼 받아 **중앙값**을 쓴다 — 한 프레임의 튐을 그대로 "
                              "소환하지 않기 위해서다")
     parser.add_argument("--timeout", type=float, default=15.0)
     args = parser.parse_args()
 
-    box = spawn_box_from_preset()
+    box = (spawn_box_for_side(args.side) if args.side
+           else spawn_box_from_preset())
 
     if args.check:
         pose = load_capture(args.check, expect_frame=args.frame)
