@@ -18,6 +18,8 @@ def test_default_registry_loads_two_real_objects():
     reg = load_registry(DEFAULT_REGISTRY)
     assert set(reg.names()) == {"shaker_closed", "cup_big_s100"}
     assert reg.get("shaker_closed").origin_above_bottom_m == pytest.approx(0.0921)
+    assert reg.get("shaker_closed").symmetry_axis == (0.0, 0.0, 1.0)
+    assert reg.get("cup_big_s100").symmetry_axis == (0.0, 1.0, 0.0)
 
 
 def test_alias_resolves_to_canonical_and_unknown_raises():

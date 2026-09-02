@@ -41,6 +41,7 @@ class ObjectSpec:
     sim_usd: str
     origin_above_bottom_m: float
     aabb: tuple[tuple[float, float, float], tuple[float, float, float]]
+    symmetry_axis: tuple[float, float, float] | None = None   # CAD 프레임 대칭축, 없으면 회전 그대로
 
 
 @dataclass(frozen=True)
@@ -94,6 +95,11 @@ def _parse_object(name: str, raw: dict) -> ObjectSpec:
     aabb = raw["aabb"]
     if len(aabb) != 2 or any(len(c) != 3 for c in aabb):
         raise ValueError(f"objects.{name}.aabb must be [[x,y,z],[x,y,z]]")
+    axis = raw.get("symmetry_axis")
+    if axis is not None:
+        axis = tuple(float(v) for v in axis)
+        if len(axis) != 3 or np.linalg.norm(axis) < 1e-9:
+            raise ValueError(f"objects.{name}.symmetry_axis must be a non-zero [x,y,z]")
     return ObjectSpec(
         name=name, real=str(raw["real"]), fpp=fpp,
         cad_to_body_pos=_validated_pos(cad["position"], f"objects.{name}.cad_to_body.position"),
@@ -102,6 +108,7 @@ def _parse_object(name: str, raw: dict) -> ObjectSpec:
         sim_usd=str(raw["sim"]["usd"]),
         origin_above_bottom_m=float(raw["sim"]["origin_above_bottom_m"]),
         aabb=(tuple(float(v) for v in aabb[0]), tuple(float(v) for v in aabb[1])),
+        symmetry_axis=axis,
     )
 
 

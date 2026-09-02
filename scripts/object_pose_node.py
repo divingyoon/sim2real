@@ -22,6 +22,7 @@ from cup_pose_relay import (  # noqa: E402
     cad_pose_to_base_body, extrinsics_at_head, head_state_is_usable,
 )
 from object_registry import extrinsics_for, input_topic, load_registry, output_topic  # noqa: E402
+from pose_symmetry import remove_twist  # noqa: E402
 
 
 class PoseConverter:
@@ -34,6 +35,7 @@ class PoseConverter:
             if canon not in self.names:
                 self.names.append(canon)
         self._ext = {n: extrinsics_for(registry.get(n), registry.camera_extrinsics) for n in self.names}
+        self._axis = {n: registry.get(n).symmetry_axis for n in self.names}
         self.base_frame = next(iter(self._ext.values())).base_frame if self._ext else "base_link"
 
     def convert(self, name: str, pos_cam: np.ndarray, quat_cam: np.ndarray,
@@ -41,7 +43,11 @@ class PoseConverter:
         ext = self._ext[name]
         if head is not None:
             ext = extrinsics_at_head(ext, *head)
-        return cad_pose_to_base_body(ext, np.asarray(pos_cam, float), np.asarray(quat_cam, float))
+        quat_cam = np.asarray(quat_cam, float)
+        if self._axis[name] is not None:
+            # 대칭축 둘레 twist 제거 — 축 방향은 보존, 축 둘레 회전(추적기 자유 방향)은 0 으로
+            quat_cam = remove_twist(quat_cam, np.asarray(self._axis[name]))
+        return cad_pose_to_base_body(ext, np.asarray(pos_cam, float), quat_cam)
 
 
 def main() -> None:

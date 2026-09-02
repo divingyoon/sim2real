@@ -29,6 +29,18 @@ def test_cup_applies_yup_to_zup_but_same_camera():
     assert not np.allclose(q_c, q_s)      # cup 은 Y-up→Z-up 회전이 붙는다
 
 
+def test_spin_about_symmetry_axis_does_not_change_output():
+    """shaker 를 CAD z 둘레로 아무리 돌려도(추적기 yaw 드리프트) 출력 자세는 같다."""
+    conv = PoseConverter(REG, ["shaker_closed"])
+    pos = np.array([0.0363, -0.1111, 0.5877])
+    ref_p, ref_q = conv.convert("shaker_closed", pos, np.array([1.0, 0.0, 0.0, 0.0]))
+    for deg in (37.0, 120.0, -95.0):
+        h = np.radians(deg) / 2
+        p, q = conv.convert("shaker_closed", pos, np.array([np.cos(h), 0.0, 0.0, np.sin(h)]))
+        assert np.allclose(p, ref_p)
+        assert np.allclose(q, ref_q, atol=1e-9) or np.allclose(q, -ref_q, atol=1e-9)
+
+
 def test_unknown_name_rejected_and_names_resolved():
     conv = PoseConverter(REG, ["cup_big_s080"])
     assert conv.names == ["cup_big_s100"]

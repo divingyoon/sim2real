@@ -25,19 +25,34 @@ from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image
 
 from object_registry import input_topic, load_registry, output_topic
+from pose_symmetry import remove_twist
 
 STALE_SEC = 1.5
 _COLORS = ((0, 0, 255), (255, 200, 0), (0, 255, 0), (255, 0, 255))
 
 
 def objects_from_registry(names: list[str]) -> list[tuple]:
-    """(이름, 카메라프레임 pose 토픽, base 프레임 토픽, BGR 색, AABB) — 레지스트리에서."""
+    """(이름, 카메라프레임 pose 토픽, base 프레임 토픽, BGR 색, AABB, 대칭축) — 레지스트리에서."""
     reg = load_registry()
     out = []
     for i, raw in enumerate(names):
         spec = reg.get(raw)
         out.append((spec.name, input_topic(spec.name), output_topic(spec.name),
-                    _COLORS[i % len(_COLORS)], spec.aabb))
+                    _COLORS[i % len(_COLORS)], spec.aabb, spec.symmetry_axis))
+    return out
+
+
+def canonical_pose(pose, axis):
+    """대칭축이 있으면 축 둘레 twist 를 뺀 **새** Pose 를 돌려준다(원본 불변)."""
+    if axis is None:
+        return pose
+    from geometry_msgs.msg import Pose
+    q = pose.orientation
+    w, x, y, z = remove_twist(np.array([q.w, q.x, q.y, q.z]), np.asarray(axis, float))
+    out = Pose()
+    out.position.x, out.position.y, out.position.z = pose.position.x, pose.position.y, pose.position.z
+    out.orientation.w, out.orientation.x, out.orientation.y, out.orientation.z = (
+        float(w), float(x), float(y), float(z))
     return out
 _BOX_EDGES = ((0, 1), (0, 2), (0, 4), (1, 3), (1, 5), (2, 3), (2, 6),
               (3, 7), (4, 5), (4, 6), (5, 7), (6, 7))
@@ -89,7 +104,7 @@ class View(Node):
                 Image, "/camera/camera/color/image_raw", self._img, 5)
         self.create_subscription(
             CameraInfo, "/camera/camera/color/camera_info", self._info, 5)
-        for name, cam_t, base_t, _, _ in self.objects:
+        for name, cam_t, base_t, _, _, _ in self.objects:
             self.create_subscription(
                 PoseStamped, cam_t,
                 lambda m, n=name: self._pose(self.cam, n, m), 10)
@@ -118,7 +133,7 @@ class View(Node):
     def _draw(self, bgr: np.ndarray) -> None:
         now = time.monotonic()
         y0 = 26
-        for name, _, _, color, aabb in self.objects:
+        for name, _, _, color, aabb, axis in self.objects:
             cam = self.cam.get(name)
             base = self.base.get(name)
             fresh = cam is not None and now - cam[1] < STALE_SEC
@@ -128,7 +143,7 @@ class View(Node):
                     uv = self.K @ np.array([p.x / p.z, p.y / p.z, 1.0])
                     u, v = int(uv[0]), int(uv[1])
                     cv2.drawMarker(bgr, (u, v), color, cv2.MARKER_CROSS, 20, 2)
-                    draw_box(bgr, self.K, cam[0].pose, aabb, color)
+                    draw_box(bgr, self.K, canonical_pose(cam[0].pose, axis), aabb, color)
             if base is not None and now - base[1] < STALE_SEC:
                 q = base[0].pose.position
                 txt = f"{name}: base ({q.x:+.3f}, {q.y:+.3f}, {q.z:+.3f})"

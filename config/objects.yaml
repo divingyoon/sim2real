@@ -18,6 +18,7 @@ objects:
       usd: hdgp/assets/cup/shaker_closed_rl.usd
       origin_above_bottom_m: 0.0921
     aabb: [[-0.044, -0.044, -0.0921], [0.044, 0.044, 0.0829]]    # 물체 프레임, 뷰어 3D 박스용
+    symmetry_axis: [0.0, 0.0, 1.0]     # 원통 대칭축(CAD 프레임) — 축 둘레 twist 를 버린다
   cup_big_s100:
     real: "빨간 컵"
     fpp:
@@ -33,6 +34,7 @@ objects:
       usd: hdgp/assets/cup/cup_big_rl.usd
       origin_above_bottom_m: 0.0773
     aabb: [[-0.0463, -0.0773, -0.044], [0.0437, 0.1003, 0.046]]   # CAD(Y-up) 프레임 AABB
+    symmetry_axis: [0.0, 1.0, 0.0]     # cup.obj 는 Y-up 이라 대칭축이 CAD y
 aliases:
   cup_big_s080: cup_big_s100     # sim 스케일 변형 — 실물은 하나
   cup_big_s120: cup_big_s100
