@@ -57,7 +57,10 @@ def test_extrinsics_for_uses_shared_camera_but_object_cad_to_body():
     ext_c = extrinsics_for(reg.get("cup_big_s100"), cam_yaml)
     assert np.allclose(ext_s.cam_pos, ext_c.cam_pos)
     assert np.allclose(ext_s.cad_to_body_quat, [1, 0, 0, 0])
-    assert np.allclose(ext_c.cad_to_body_quat, [0.707107, 0.707107, 0, 0], atol=1e-5)
+    assert np.allclose(ext_c.cad_to_body_quat, [0.707107, -0.707107, 0, 0], atol=1e-5)
+    # rot_x(−90°): body z 가 CAD +y(cup.obj 의 위)로 가야 한다
+    from pose_symmetry import quat_axis_direction
+    assert np.allclose(quat_axis_direction(ext_c.cad_to_body_quat, [0, 0, 1]), [0, 1, 0], atol=1e-5)
     assert ext_s.base_frame == "base_link"
 
 

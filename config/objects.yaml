@@ -29,7 +29,8 @@ objects:
       yolo_confidence: 0.15
     cad_to_body:
       position: [0.0, 0.0, 0.0]
-      orientation_wxyz: [0.707107, 0.707107, 0.0, 0.0]   # cup.obj Y-up → sim Z-up
+      orientation_wxyz: [0.707107, -0.707107, 0.0, 0.0]  # cup.obj Y-up → sim Z-up = rot_x(−90°): body z → CAD +y
+                                                         # ★구값 +90° 는 body z 를 CAD −y 로 보내 자세가 거꾸로였다(09.03 실측)
     sim:
       usd: hdgp/assets/cup/cup_big_rl.usd
       origin_above_bottom_m: 0.0773
