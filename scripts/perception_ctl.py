@@ -25,8 +25,10 @@ from object_registry import load_registry  # noqa: E402
 
 def build_payload(args, registry) -> dict | None:
     if args.op == "start":
-        return {"op": "start", "objects": [registry.resolve(n) for n in args.objects],
-                "viewer": bool(args.viewer)}
+        payload = {"op": "start", "objects": [registry.resolve(n) for n in args.objects]}
+        if args.viewer:
+            payload["viewer"] = True      # 키를 빼면 런처는 뷰어를 건드리지 않는다(False 는 '내려라')
+        return payload
     if args.op == "stop":
         return {"op": "stop", "camera": bool(args.camera)}
     if args.op == "viewer":

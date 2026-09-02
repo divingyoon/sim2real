@@ -198,13 +198,16 @@ def main() -> None:
         return
     threading.Thread(target=server.serve_forever, daemon=True).start()
     cv2.namedWindow("head view", cv2.WINDOW_NORMAL)
-    while True:
+    # ★rclpy.ok() 를 봐야 SIGTERM 에 죽는다 — rclpy 가 SIGTERM 을 가로채 shutdown 만 하므로
+    #   waitKey 루프만 돌면 프로세스가 영원히 남는다(09.03 viewer_down 실패로 실측).
+    while rclpy.ok():
         with view.lock:
             frame = None if view.frame is None else view.frame.copy()
         if frame is not None:
             cv2.imshow("head view", frame)
         if cv2.waitKey(50) & 0xFF == ord("q"):
             break
+    cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
