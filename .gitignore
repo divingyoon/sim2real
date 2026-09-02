@@ -25,3 +25,9 @@ logs/policy/**/*.pth
 
 # 미션 실행 기록 (state.json/jsonl/pids) — 런타임 상태이지 산출물이 아니다
 logs/mission/
+
+# 실기 라운드 rosbag2 (수 GB). 판정·분석 결과는 docs/ 와 npz 트레이스로 남는다
+logs/bags/
+
+# 정책 가중치 — 배포 스냅샷은 md5 로 문서에 못 박고 파일은 커밋하지 않는다
+logs/policy/**/nn/*.pth

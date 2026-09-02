@@ -61,6 +61,32 @@ def quat_angle_between(a: np.ndarray, b: np.ndarray) -> float:
     return 2.0 * float(np.arccos(np.clip(dot, -1.0, 1.0)))
 
 
+def home_from_args(args, preset) -> list:
+    """`--home` > `--home-from-run` > 소스 상수 순으로 cspace rest 를 정한다."""
+    if args.home:
+        vals = [float(v) for v in args.home.split(",")]
+        if len(vals) != 7:
+            raise SystemExit(f"--home 은 7값 — 받은 {len(vals)}")
+        print(f"[home] --home 직접 지정: {vals}")
+        return vals
+    if args.home_from_run:
+        # dump 는 `!!python/tuple` 같은 태그를 담고 있어 safe_load 가 못 읽는다.
+        # 홈 7값만 필요하므로 정규식으로 뽑는다(임의 객체 역직렬화 회피).
+        import re
+        text = Path(args.home_from_run).read_text()
+        vals = []
+        for i in range(1, 8):
+            m = re.search(rf"^\s*l_aj_{i}:\s*(-?[0-9.eE+]+)\s*$", text, re.M)
+            if m is None:
+                raise SystemExit(f"dump 에서 l_aj_{i} 를 못 찾았다: {args.home_from_run}")
+            vals.append(float(m.group(1)))
+        print(f"[home] 런 dump {args.home_from_run} → {vals}")
+        return vals
+    vals = [preset.LEFT_ARM_HOME_JOINT_POS[f"l_aj_{i}"] for i in range(1, 8)]
+    print(f"[home] ⚠ 소스 상수(v1 트랙) 사용: {vals} — v2 정책이면 --home-from-run 을 줘라")
+    return vals
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -72,6 +98,9 @@ def main() -> int:
                         help="목표 하나당 수렴 대기 스텝 (env step 기준)")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--out", type=Path, default=None, help="결과 json 경로")
+    parser.add_argument("--home-from-run", type=Path, default=None,
+                        help="런 dump params/env.yaml — cspace rest 를 여기서 읽는다(권장)")
+    parser.add_argument("--home", default=None, help="쉼표 구분 7값으로 직접 지정")
     args = parser.parse_args()
 
     fabrics_src = args.fabrics_src or (args.hdgp / "source/FABRICS/src")
@@ -91,7 +120,12 @@ def main() -> int:
     device = args.device
     initialize_warp(str(device)[-1])
 
-    home = [preset.LEFT_ARM_HOME_JOINT_POS[f"l_aj_{i}"] for i in range(1, 8)]
+    # ★홈의 진실원천은 **런 dump** 다. 소스 상수(`LEFT_ARM_HOME_JOINT_POS`)는 v1
+    #   트랙(grasp_sensor)의 홈이고, v2(grasp_sensor_v2)는 env 플래그로 다른 홈
+    #   (J147/LEVEL/HIGH/LOW/MID)을 고른다 — 09.02 실측: v1 j4 +0.9336·j7 −0.3306 vs
+    #   v2E29 dump j4 +0.5665·j7 −0.8304 (21°·28.6° 차이). cspace rest 가 틀리면
+    #   fabric 이 조용히 엉뚱한 자세로 당긴다(이 probe 의 검사 ② 자체).
+    home = home_from_args(args, preset)
     fabric_dt = 1.0 / 60.0 / float(preset.FABRIC_DECIMATION)
 
     world = WorldMeshesModel(batch_size=1, max_objects_per_env=8, device=device,
