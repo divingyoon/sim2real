@@ -39,6 +39,19 @@ def test_spin_about_symmetry_axis_does_not_change_output():
         p, q = conv.convert("shaker_closed", pos, np.array([np.cos(h), 0.0, 0.0, np.sin(h)]))
         assert np.allclose(p, ref_p)
         assert np.allclose(q, ref_q, atol=1e-9) or np.allclose(q, -ref_q, atol=1e-9)
+    # 출력 자세엔 base z 둘레 twist 가 없다(z 성분 0) → 정립 물체는 항등에 가깝다
+    assert abs(ref_q[3]) < 1e-9
+
+
+def test_cup_spin_about_cad_y_is_removed_in_body_frame():
+    """cup 은 CAD Y-up: CAD y 둘레 회전이 body z 둘레 회전이 되고, 출력에서 사라져야 한다."""
+    conv = PoseConverter(REG, ["cup_big_s100"])
+    pos = np.array([0.0, -0.1, 0.6])
+    ref_p, ref_q = conv.convert("cup_big_s100", pos, np.array([1.0, 0.0, 0.0, 0.0]))
+    h = np.radians(70.0) / 2
+    p, q = conv.convert("cup_big_s100", pos, np.array([np.cos(h), 0.0, np.sin(h), 0.0]))
+    assert np.allclose(p, ref_p)
+    assert np.allclose(q, ref_q, atol=1e-9) or np.allclose(q, -ref_q, atol=1e-9)
 
 
 def test_unknown_name_rejected_and_names_resolved():
