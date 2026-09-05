@@ -127,8 +127,13 @@ def assemble_actor_obs(
     last_action: np.ndarray,
     gripper_gate: float,
     palm_box,
+    segments: tuple[tuple[str, int], ...] | None = None,
 ) -> np.ndarray:
-    """49D actor obs. 입력은 전부 **world 프레임**(관절 제외)."""
+    """actor obs. 입력은 전부 **world 프레임**(관절 제외).
+
+    `segments` 로 레이아웃을 주면 그 항만 그 순서로 조립한다(런 dump 기준).
+    기본값은 `SEGMENTS`(v2 49D) — 기존 호출부 호환.
+    """
     q = _check("joint_pos", joint_pos, NUM_ARM_AND_GRIPPER_DOF)
     qd = _check("joint_vel", joint_vel, NUM_ARM_AND_GRIPPER_DOF)
     q0 = _check("joint_pos_default", joint_pos_default, NUM_ARM_AND_GRIPPER_DOF)
@@ -139,19 +144,63 @@ def assemble_actor_obs(
     tcp_b, _ = subtract_frame(root_pos, root_quat, tcp_pos)
     _, base_R = subtract_frame(root_pos, root_quat, gripper_base_pos, gripper_base_quat)
 
-    obs = np.concatenate([
-        q - q0,
-        qd - qd0,
-        cup_b,
-        np.asarray(goal_pos, dtype=float).reshape(3),
-        np.asarray(goal_quat, dtype=float).reshape(4),
-        act,
-        np.array([float(gripper_gate)]),
-        normalize_tcp(tcp_b, palm_box),
-        base_R[:, :2].reshape(-1),
-        np.asarray(goal_pos, dtype=float).reshape(3) - np.asarray(cup_pos, dtype=float).reshape(3),
-        np.array([cup_upright(cup_quat)]),
-    ])
-    if obs.size != ACTOR_OBS_DIM:
-        raise ValueError(f"조립 결과가 {obs.size}차원 — 계약은 {ACTOR_OBS_DIM}")
+    parts = {
+        "joint_pos": q - q0,
+        "joint_vel": qd - qd0,
+        "object_position": cup_b,
+        "target_object_position": np.concatenate([
+            np.asarray(goal_pos, dtype=float).reshape(3),
+            np.asarray(goal_quat, dtype=float).reshape(4)]),
+        "actions": act,
+        "gripper_gate": np.array([float(gripper_gate)]),
+        "tcp_pos": normalize_tcp(tcp_b, palm_box),
+        "palm_rot": base_R[:, :2].reshape(-1),
+        "goal_minus_cup": (np.asarray(goal_pos, dtype=float).reshape(3)
+                           - np.asarray(cup_pos, dtype=float).reshape(3)),
+        "cup_upright": np.array([cup_upright(cup_quat)]),
+    }
+    layout = SEGMENTS if segments is None else tuple(segments)
+    obs = np.concatenate([parts[name] for name, _ in layout])
+    want = sum(d for _, d in layout)
+    if obs.size != want:
+        raise ValueError(f"조립 결과가 {obs.size}차원 — 계약은 {want}")
     return obs
+
+
+def segments_from_run(env_yaml_path) -> tuple[tuple[str, int], ...]:
+    """런 dump 의 `observations.policy` 항 순서를 그대로 읽는다.
+
+    ★★09.03: 트랙마다 obs 가 다르다 — `grasp_sensor_v2` 는 49D(끝에
+      `goal_minus_cup` 3 + `cup_upright` 1), `grasp_sensor_fab` 는 45D 로 그 둘이 없다.
+      레이아웃을 소스에 박아두면 체크포인트를 갈아끼울 때 조용히 어긋난다.
+      항 이름이 곧 계약이므로 dump 에서 읽고, 모르는 항이 나오면 **즉시 죽인다**.
+    """
+    import re
+    from pathlib import Path as _P
+
+    lines = _P(env_yaml_path).read_text().split("\n")
+    dims = dict(SEGMENTS)
+    out, in_obs, in_policy = [], False, False
+    for line in lines:
+        if re.match(r"^observations:", line):
+            in_obs = True
+            continue
+        if in_obs and re.match(r"^[a-z_]+:", line):
+            break
+        if not in_obs:
+            continue
+        m = re.match(r"^  ([a-z_0-9]+):$", line)
+        if m:
+            in_policy = m.group(1) == "policy"
+            continue
+        m2 = re.match(r"^    ([a-z_0-9]+):$", line)
+        if m2 and in_policy:
+            name = m2.group(1)
+            if name not in dims:
+                raise SystemExit(
+                    f"[obs] 이 런은 모르는 관측 항 `{name}` 을 쓴다 — 배포 조립기에 "
+                    "그 항을 먼저 추가해야 한다(추측 금지)")
+            out.append((name, dims[name]))
+    if not out:
+        raise SystemExit(f"[obs] {env_yaml_path} 에서 policy 관측 항을 못 읽었다")
+    return tuple(out)

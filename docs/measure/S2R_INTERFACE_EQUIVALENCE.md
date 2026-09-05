@@ -160,7 +160,7 @@
 
 §6·§6-1 은 **우팔 + DG-5F 20관절 손** 기준이다. 다음 s2r 대상인
 `open-grip_l_grasp_sensor_fab` 은 좌팔 + 2지 그리퍼이고 끝단 질량이 전혀 다르므로 같은
-계산을 좌팔 체인으로 다시 했다. 재현: `python3 scripts/report_left_arm_gravity.py`
+계산을 좌팔 체인으로 다시 했다. 재현: `python3 scripts/analysis/report_left_arm_gravity.py`
 (URDF·preset·control_gains.yaml 만 읽는다. Isaac·하드웨어 불필요)
 
 홈 `[-0.0136, -0.3757, -0.0010, +0.9336, -0.4655, +0.0003, -0.3306]`,
@@ -228,7 +228,7 @@
 
 `open-grip_l_grasp_sensor_fab` 정책(fab_test16 best, ep1017, rew 167.41, obs 36 / act 7)을
 Isaac 에서 1200 스텝 굴려 남긴 기록. 도구 = hdgp `scripts/probes/probe_fab_shadow_record.py`
-→ `sim2real/scripts/shadow_report.py`. 궤적은 TCP 경로 942 mm(범위 x 227 · y 318 · z 333 mm),
+→ `sim2real/scripts/analysis/shadow_report.py`. 궤적은 TCP 경로 942 mm(범위 x 227 · y 318 · z 333 mm),
 7관절 전부 0.5~1.7 rad 이동. 리셋 0회.
 
 **L1 — Fabrics attractor 가 지령을 실현하나** (FK(fabric_q) vs palm 지령)
@@ -309,7 +309,7 @@ npz 는 `meta_task_sha256`·`meta_fabrics` 로 **자기가 어떤 소스로 나�
 | ③ | **같은 지령에 같은 관절 해가 나온다** | ✅ | 아래 |
 | ④ | 실기 상태를 먹여 도는 **라이브 노드** | ❌ | **없다** |
 
-**③ 패리티 실측** — `scripts/probe_fabric_deploy_parity.py`. Isaac 기록의 palm 지령
+**③ 패리티 실측** — `scripts/probes/probe_fabric_deploy_parity.py`. Isaac 기록의 palm 지령
 1200 스텝을 배포 인터프리터의 fabric 에 같은 초기상태·같은 파라미터로 다시 먹였다.
 
 | | mean | p95 | max |
@@ -457,7 +457,7 @@ hdgp 에는 관측을 정의하는 태스크가 **22개** 있다(grasp_v1/v2/v7_
 pour_v1/v3/v4/v5/sensor · rh56f1 · gripper · agnostic ×2). 어느 것을 배포 대상으로 삼든
 obs 계약을 손으로 옮겨 적는 순간 드리프트가 시작된다 → **소스에서 자동 추출**한다.
 
-`scripts/obs_contract.py` + `scripts/obs_contract_report.py`
+`scripts/obs_contract.py` + `scripts/analysis/obs_contract_report.py`
 
 ```bash
 python3 obs_contract_report.py                                # 전 태스크 요약

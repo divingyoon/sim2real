@@ -66,7 +66,7 @@ launch 는 일부러 spawn 하지 않는다 — 토크 경로를 켜는 것은 �
 
 # 1) 손 자세에 맞는 페이로드를 뽑는다
 cd ~/rl_ws/sim2real && . .venv/bin/activate
-python3 scripts/hand_payload.py --pose config/right_hand_fist.yaml --format arg
+python3 scripts/calib/hand_payload.py --pose config/right_hand_fist.yaml --format arg
 #   → --payload 0.8350,-0.00450,-0.01723,0.22147   (자세마다 다르다, 주먹/폄 각각)
 
 # 2) effort 컨트롤러를 켠다 (JTC 는 계속 position 을 잡고 있다)

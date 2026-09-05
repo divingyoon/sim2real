@@ -28,10 +28,13 @@
 #   목을 돌려 쓰려면 cup_pose_relay 의 --head-joint-topic 을 켠다 —
 #   그러면 이 블록 대신 목 각도로 매번 계산한다.
 #   자세 재현: scripts/head_home.py --execute
+# ★2026-09-05 갱신 — head_v1 CAD 사전 모델 hand-eye v2 (config/head_extrinsics.yaml 참조).
+#   RGB 렌즈 = head_v1 의 y+0.0326 개구부, tilt 영점 +90.51°. 테이블이 0.204(줄자 0.205)로 맞는다.
+#   v1(09-01) 기준 자세 값: position [0.0674838252, 0.038116775, 0.841995575] — 카메라 높이 +21 mm 오류가 있었다.
 camera:
   frame: camera_color_optical_frame
-  position: [0.0674838252, 0.038116775, 0.841995575]
-  orientation_wxyz: [0.115742074, -0.690661053, 0.70416182, -0.117248508]
+  position: [0.0608598821, 0.03255, 0.816465107]
+  orientation_wxyz: [0.119659999, -0.69690852, 0.69690852, -0.119659999]
 
 # ── T_cad_body: 컵 CAD 메시 프레임 → sim body 프레임 ───────────────────────
 # FoundationPose에 넣는 CAD 메시의 원점/축이 sim의 컵 body 프레임과 다르면

@@ -69,20 +69,20 @@ ros2 bag record -o logs/shadow/rosbags/run_$(date +%H%M%S) /joint_states \
   /left_joint_trajectory_controller/joint_trajectory /left_gripper_controller/joint_trajectory \
   /isaacsim/left_arm_cmd /isaacsim/left_gripper_cmd /shadow/action /shadow/sim_target /shadow/sim_meas &
 # 3) 브리지(선보상) + 어댑터
-python3 scripts/isaacsim_cmd_to_jtc.py --robot gripper_left --max-vel 1.0 \
+python3 scripts/nodes/isaacsim_cmd_to_jtc.py --robot gripper_left --max-vel 1.0 \
   --arm-offset " -0.0666,-0.0298,-0.0101,+0.0549,+0.0174,-0.0001,-0.0732" &
-python3 scripts/udp_cmd_to_ros.py --port 47311 --log logs/shadow/live_adapter.csv --execute &
+python3 scripts/nodes/udp_cmd_to_ros.py --port 47311 --log logs/shadow/live_adapter.csv --execute &
 # 4) 리셋(차렷→홈, 최초 1회) 또는 홈 복귀
-python3 scripts/shadow_replay.py --sim logs/shadow/reset_both/reset_left.npz \
+python3 scripts/nodes/shadow_replay.py --sim logs/shadow/reset_both/reset_left.npz \
   --robot gripper_left --rate-scale 1.0 --allow-idle-arm-mismatch --execute   # 차렷에서
-python3 scripts/reset_pose.py --robot gripper_left --sim logs/shadow/sim_v2H_wide.npz --execute  # 근처에서
+python3 scripts/ops/reset_pose.py --robot gripper_left --sim logs/shadow/sim_v2H_wide.npz --execute  # 근처에서
 # 5) Isaac (★venv 없는 셸에서)
-cd ~/rl_ws/IsaacLab && ./isaaclab.sh -p ~/rl_ws/sim2real/scripts/probe_v2_shadow_record.py \
+cd ~/rl_ws/IsaacLab && ./isaaclab.sh -p ~/rl_ws/sim2real/scripts/probes/probe_v2_shadow_record.py \
   --checkpoint ~/rl_ws/sim2real/logs/policy/left_v2H_wide/nn/v2H_wide_best.pth \
   --steps 1500 --out ~/rl_ws/sim2real/logs/shadow/sim_live.npz \
   --stream_udp 47311 --stream_rate_scale 0.25 --stream_meas --hold_open --gui
 # 6) 분석 — bag 하나로 실팔 vs sim팔 (docs 본문 §1 수치 재산출)
-#    (분석 스니펫: scripts/analyze_live_run.py + run6 판정 코드)
+#    (분석 스니펫: scripts/analysis/analyze_live_run.py + run6 판정 코드)
 ```
 
 ## 5. 함정 기록 (재발 방지)

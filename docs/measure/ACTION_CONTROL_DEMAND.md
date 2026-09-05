@@ -103,7 +103,7 @@ sim 은 팔을 `set_joint_position_target` + **stiffness 400 / damping 80** 으�
   용도**이지 절대 토크 예측용이 아니다.
 - sim: `grasp_{side}_env_cfg.py` `ImplicitActuatorCfg`
 
-**재현**: `python3 scripts/report_arm_bandwidth.py [--md]`
+**재현**: `python3 scripts/analysis/report_arm_bandwidth.py [--md]`
 
 ### 해석
 
@@ -122,13 +122,13 @@ sim 은 팔을 `set_joint_position_target` + **stiffness 400 / damping 80** 으�
 
 ```bash
 # 요구 프로파일 (sim 처럼 즉시 추종 → 정책 순수 지령)
-IsaacLab/isaaclab.sh -p scripts/grasp_loop_sim.py --robot tesollo_bi_s__right \
+IsaacLab/isaaclab.sh -p scripts/analysis/grasp_loop_sim.py --robot tesollo_bi_s__right \
     --agent <params/agent.yaml> --ckpt <ckpt.pth> \
     --arm-model rate --max-vel 99 --demand-csv logs/measure/demand_right.csv
 
 # 능력–요구 스윕 (실측 게인 PD)
 for v in 0.1 0.3 0.5 1.0 2.0; do
-  IsaacLab/isaaclab.sh -p scripts/grasp_loop_sim.py --robot tesollo_bi_s__right \
+  IsaacLab/isaaclab.sh -p scripts/analysis/grasp_loop_sim.py --robot tesollo_bi_s__right \
       --agent ... --ckpt ... --arm-model pd --max-vel $v
 done
 ```

@@ -150,7 +150,7 @@ git commit -m "feat(relay): /cup_pose 입력을 FP++ camera-frame PoseStamped �
 extrinsics yaml의 `cad_to_body`(현재 PLACEHOLDER identity)를 실측으로 채운다. cup.obj는 **Y축이 높이(17.76cm)**, sim body는 **+z=위, 원점=바닥 중심**. 회전(Y-up→Z-up) + 원점 이동을 도출하는 순수 함수와, hdgp의 sim 컵 body 정의를 읽어 확정하는 검증 단계로 나눈다.
 
 **Files:**
-- Create: `sim2real/scripts/cad_body_alignment.py` (순수 도출 로직)
+- Create: `sim2real/scripts/calib/cad_body_alignment.py` (순수 도출 로직)
 - Create: `sim2real/scripts/test_cad_body_alignment.py`
 - Modify: `sim2real/config/global_camera_extrinsics.yaml` (cad_to_body 값)
 - Read-only 참조: `hdgp/assets/cup/*.stl`, hdgp 컵 body/USD 정의 (READ-ONLY)
@@ -303,7 +303,7 @@ Expected: PASS
 - [ ] **Step 8: 커밋**
 
 ```bash
-cd sim2real && git add scripts/cad_body_alignment.py scripts/test_cad_body_alignment.py config/global_camera_extrinsics.yaml
+cd sim2real && git add scripts/calib/cad_body_alignment.py scripts/test_cad_body_alignment.py config/global_camera_extrinsics.yaml
 git commit -m "feat(extrinsics): T_cad_body 실측 도출 (cup.obj Y-up→sim body Z-up)"
 ```
 
@@ -386,8 +386,8 @@ git commit -m "feat(link): /cup_pose 도메인 연계 점검 스크립트 + 토�
 `sim2real_dryrun.py`는 이미 `/cup_pose`를 선택 구독한다. 카메라·로봇 없이, 합성 `/cup_pose`를 발행하는 작은 노드로 grasp-v1 obs(cup-relative 항)가 컵 위치를 실제로 반영하는지 검증한다. (grasp-v1 spec Stage 0의 카메라 무관 부분.)
 
 **Files:**
-- Create: `sim2real/scripts/fake_cup_pose_pub.py` (합성 /cup_pose 발행 — 정지/원운동)
-- Read-only 참조: `sim2real/scripts/sim2real_dryrun.py`, `sim2real_inference.py` (obs 조립)
+- Create: `sim2real/scripts/fakes/fake_cup_pose_pub.py` (합성 /cup_pose 발행 — 정지/원운동)
+- Read-only 참조: `sim2real/scripts/deprecated/sim2real_dryrun.py`, `sim2real_inference.py` (obs 조립)
 
 **Interfaces:**
 - Consumes: rclpy, geometry_msgs/PoseStamped.
@@ -479,7 +479,7 @@ Expected: 합성 /cup_pose 변화가 obs cup-relative 항에 실시간 반영.
 - [ ] **Step 4: 커밋**
 
 ```bash
-cd sim2real && git add scripts/fake_cup_pose_pub.py
+cd sim2real && git add scripts/fakes/fake_cup_pose_pub.py
 git commit -m "feat(dryrun): 합성 /cup_pose 발행 노드 (카메라 무관 grasp-v1 obs 검증)"
 ```
 
@@ -491,7 +491,7 @@ git commit -m "feat(dryrun): 합성 /cup_pose 발행 노드 (카메라 무관 gr
 
 **Files:**
 - Create: `sim2real/docs/ROBOT_MATERIALS.md`
-- Read-only 참조: `hdgp/log`, `hdgp/outputs`, `hdgp/source/openarm/openarm/tesollo/right/grasp_v1/`, `sim2real/scripts/sim2real_inference.py`, `sim2real_dryrun.py`, `policy_loader.py`
+- Read-only 참조: `hdgp/log`, `hdgp/outputs`, `hdgp/source/openarm/openarm/tesollo/right/grasp_v1/`, `sim2real/scripts/deprecated/sim2real_inference.py`, `sim2real_dryrun.py`, `policy_loader.py`
 
 **Interfaces:**
 - Consumes: 없음(문서). Produces: 사용자용 clone/배치 체크리스트.
@@ -511,7 +511,7 @@ grasp-v1(=5g_grasp_right-v7) 체크포인트(.pth) + agent.yaml(params) 경로�
 Run:
 ```bash
 grep -rn "isaacsim_bridge\|openarm_control\|dg5f_right\|contact_forces\|/joint_states" \
-  sim2real/scripts/sim2real_inference.py sim2real/scripts/sim2real_dryrun.py | head -20
+  sim2real/scripts/deprecated/sim2real_inference.py sim2real/scripts/deprecated/sim2real_dryrun.py | head -20
 ```
 sim2real가 의존하는 ROS2 패키지(openarm 팔 드라이버, Tesollo dg5f_right, isaacsim_bridge,
 openarm_control launch)와 구독/발행 토픽을 목록화.

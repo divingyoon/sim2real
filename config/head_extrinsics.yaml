@@ -1,33 +1,36 @@
-# head 카메라 extrinsics — hand-eye (2026-09-01)
+# head 카메라 extrinsics v2 — head_v1 CAD 사전 모델 hand-eye 재계산 (2026-09-05 적용)
 #
-# ★기존 global_camera_extrinsics.yaml 과 달리 **목 자세에 묶이지 않는다.**
-#   T_base_cam(pan,tilt) = T_base_neck(pan,tilt) ∘ T_neck_cam
-#   FK 는 scripts/head_fk_chain.py (URDF 를 직접 읽는다).
+#   T_base_cam(pan,tilt) = T_base_neck(pan,tilt) ∘ T_neck_cam      FK: scripts/head_fk_chain.py (head_v1 URDF)
+#   T_neck_cam = Rot_y(tilt_off) ∘ T_cad
+#     tilt_off = +90.5145°  (tilt 인코더 영점: CAD 관절각 = 인코더 + 90.51° — 인코더 0 이면 카메라가 바로 아래를 본다)
+#     T_cad    = head_v1 camera_link 의 RGB 렌즈 개구부 [0.03486, 0.03255, 0.10232] (Fusion 라벨 ir_projector_frame),
+#                ROS optical 자세(+Z 전방·+X 우·+Y 하), tilt 축점 [0.0225, -0.011546, 0.066003] 기준으로 옮긴 것
+#   pan 인코더 영점 오프셋 = 0 (보드 영상으로는 관측 불가 — 홈 실사진의 상판 볼트 패턴 랜드마크로 0 확인, 잔차 3~6 px)
 #
-# 25자세 · 코너 553개 · RMS 재투영 1.214 px
-#   (0.64 m 에서 약 1.3 mm)
-# 야코비안 조건수 5.45e+02 — 잘 구속됨
+# 근거 (scripts/calib/solve_head_cad_prior.py, run1 25 프레임·551 코너):
+#   color_frame(y −0.0115) 가정: RMS 5.94 px  /  이 개구부(y +0.0326): RMS 1.86 px, 카메라 회전 잔차 불필요,
+#   보드(=테이블 위 종이) z 0.2037 — 줄자·env_v1 0.205 와 일치. 홈 실사진 vs sim 렌더(our_source/head_check_0905) 일치.
+#   ⇒ 옛 v1(2026-09-01 hand-eye, T_neck_cam 자유 6DoF)은 RGB 개구부 오지정을 카메라 높이 +21 mm 로 흡수해 테이블을 0.226 으로 봤다.
+#   옛 값: config/head_extrinsics_pre0905_handeye_v1.yaml
 #
-# ★인코더 영점 오프셋은 **관측 불가능**해서 풀지 않는다(게이지 자유도).
-#   pan 오프셋은 보드 자세로, tilt 오프셋은 T_neck_cam 으로 흡수된다.
-#   자세한 근거는 refine_head_handeye.py 문서화 참조.
-
 # T_neck_cam: head_camera(tilt 링크) ← camera_color_optical_frame
 neck_to_camera:
   matrix:
-    - [-0.018382524, -0.999667359, -0.018090184, +0.051161979]
-    - [-0.999815460, +0.018480193, -0.005246761, +0.052616775]
-    - [+0.005579325, +0.017990397, -0.999822593, +0.009042476]
+    - [+0.000000000, -0.999959683, -0.008979598, +0.036204548]
+    - [-1.000000000, +0.000000000, +0.000000000, +0.044096000]
+    - [+0.000000000, +0.008979598, -0.999959683, -0.012685614]
     - [+0.000000000, +0.000000000, +0.000000000, +1.000000000]
 
-# 참고: 기준 자세(pan 0 / tilt -20)에서의 T_base_cam.
-#   이 값은 파생물이다 — 목을 돌리면 위 식으로 다시 계산할 것.
+tilt_encoder_offset_deg: 90.5145
+pan_encoder_offset_deg: 0.0
+rgb_lens_in_camera_link: [0.03486, 0.03255, 0.10232]
+
+# 참고: 기준 자세(pan 0 / tilt -20)에서의 T_base_cam. 파생물이다 — 목을 돌리면 위 식으로 다시 계산할 것.
 reference_pose:
   pan_deg: 0.0
   tilt_deg: -20.0
-  position: [+0.067483825, +0.038116775, +0.841995576]
-  orientation_wxyz: [+0.115742073, -0.690661053, +0.704161820, -0.117248508]
+  position: [+0.060859882, +0.032550000, +0.816465107]
+  orientation_wxyz: [+0.119659999, -0.696908520, +0.696908520, -0.119659999]
 
-# 부산물: 보드가 테이블 어디에 있었는지 (hand-eye 가 자동으로 찾아냈다)
-board_in_base:
-  position: [+0.170713, -0.084123, +0.226359]
+# 부산물: 테이블 상면(보드 종이) 높이 — hand-eye 가 CAD 사슬로 낸 값 (줄자 0.205)
+table_top_z: 0.2037

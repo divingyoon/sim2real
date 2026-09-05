@@ -31,16 +31,16 @@
 | `scripts/test_object_registry.py` | 위 순수 로직 pytest |
 | `scripts/perception_launcher_core.py` | 명령 파싱, 원하는 상태→액션 계획, 원격 상태 파싱, status 집계 (순수) |
 | `scripts/test_perception_launcher_core.py` | 위 순수 로직 pytest |
-| `scripts/perception_launcher_node.py` | 노드 1: `/perception/cmd` → ssh 실행, `/perception/status` 발행 |
-| `scripts/perception_ctl.py` | 노드 2 의 사용자 면: CLI → `/perception/cmd` 발행, status 표 출력 |
-| `scripts/object_pose_node.py` | 노드 3: 카메라 프레임 pose → base_link `/objects/<name>/pose` |
+| `scripts/nodes/perception_launcher_node.py` | 노드 1: `/perception/cmd` → ssh 실행, `/perception/status` 발행 |
+| `scripts/ops/perception_ctl.py` | 노드 2 의 사용자 면: CLI → `/perception/cmd` 발행, status 표 출력 |
+| `scripts/nodes/object_pose_node.py` | 노드 3: 카메라 프레임 pose → base_link `/objects/<name>/pose` |
 | `scripts/test_object_pose_node.py` | 노드 3 순수부(레지스트리→Extrinsics→변환) pytest |
 | `scripts/vision/camera_up.sh` `camera_down.sh` | RealSense ROS 노드 기동/종료 |
 | `scripts/vision/fpp_up.sh` `fpp_down.sh` | 물체별 FP++ 컨테이너 기동/종료 |
 | `scripts/vision/viewer_up.sh` `viewer_down.sh` | 모니터 창(DISPLAY=:0)+MJPEG 뷰어 |
 | `scripts/vision/status.sh` | 카메라·컨테이너·뷰어 상태 JSON 한 줄 |
 | `scripts/vision/legacy_down.sh` | 옛 relay/UDP tx 프로세스·옛 컨테이너 정리 |
-| `scripts/cup_view_stream.py` (수정) | 물체 목록·AABB 를 레지스트리에서 받도록 변경 |
+| `scripts/vision/cup_view_stream.py` (수정) | 물체 목록·AABB 를 레지스트리에서 받도록 변경 |
 
 ---
 
@@ -632,7 +632,7 @@ git commit -m "feat(perception): 런처 순수 로직 — 명령 파싱·액션 
 
 **Files:**
 - Create: `scripts/vision/common.sh`, `camera_up.sh`, `camera_down.sh`, `fpp_up.sh`, `fpp_down.sh`, `viewer_up.sh`, `viewer_down.sh`, `status.sh`, `legacy_down.sh`
-- Modify: `scripts/cup_view_stream.py` (OBJECTS/AABB 상수 → `--objects` 인자 + 레지스트리)
+- Modify: `scripts/vision/cup_view_stream.py` (OBJECTS/AABB 상수 → `--objects` 인자 + 레지스트리)
 
 **Interfaces:**
 - Consumes: `render_fpp_yaml` 산출 yaml 이 `/opt/params/<name>.yaml` 경로로 마운트됨(런처가 `/home/usr/rl_ws/sim2real/log/fpp_params/<name>.yaml` 에 써 두고 그 경로를 `fpp_up.sh` 에 준다).
@@ -782,7 +782,7 @@ echo "legacy down"
 
 - [ ] **Step 2: 뷰어를 레지스트리 기반으로 수정**
 
-`scripts/cup_view_stream.py` 에서 상수 `AABB`, `OBJECTS` 를 지우고, `View.__init__(self, objects, compressed)` 가 `(name, cam_topic, base_topic, color, aabb)` 목록을 받도록 바꾼다. `main()` 에 `--objects` 인자를 추가:
+`scripts/vision/cup_view_stream.py` 에서 상수 `AABB`, `OBJECTS` 를 지우고, `View.__init__(self, objects, compressed)` 가 `(name, cam_topic, base_topic, color, aabb)` 목록을 받도록 바꾼다. `main()` 에 `--objects` 인자를 추가:
 
 ```python
 from object_registry import input_topic, load_registry, output_topic  # 파일 상단 import 에 추가
@@ -810,7 +810,7 @@ def objects_from_registry(names: list[str]) -> list[tuple]:
 
 - [ ] **Step 3: 셸 문법·뷰어 import 확인 (로컬)**
 
-Run: `cd /home/user/rl_ws/sim2real && bash -n scripts/vision/*.sh && python3 -c "import ast,sys; ast.parse(open('scripts/cup_view_stream.py').read()); print('ok')"`
+Run: `cd /home/user/rl_ws/sim2real && bash -n scripts/vision/*.sh && python3 -c "import ast,sys; ast.parse(open('scripts/vision/cup_view_stream.py').read()); print('ok')"`
 Expected: `ok`, 오류 없음
 
 - [ ] **Step 4: 커밋**
@@ -818,7 +818,7 @@ Expected: `ok`, 오류 없음
 ```bash
 cd /home/user/rl_ws/sim2real
 chmod +x scripts/vision/*.sh
-git add scripts/vision scripts/cup_view_stream.py
+git add scripts/vision scripts/vision/cup_view_stream.py
 git commit -m "feat(perception): vision-3090 쪽 기동 스크립트 repo 화 + 뷰어 레지스트리 기반"
 ```
 
@@ -827,8 +827,8 @@ git commit -m "feat(perception): vision-3090 쪽 기동 스크립트 repo 화 + 
 ### Task 4: 런처 노드 (`perception_launcher_node.py`) + CLI (`perception_ctl.py`)
 
 **Files:**
-- Create: `scripts/perception_launcher_node.py`
-- Create: `scripts/perception_ctl.py`
+- Create: `scripts/nodes/perception_launcher_node.py`
+- Create: `scripts/ops/perception_ctl.py`
 
 **Interfaces:**
 - Consumes: Task 1 (`load_registry`, `render_fpp_yaml`, `output_topic`, `container_name`), Task 2 (`parse_command`, `parse_remote_status`, `plan_actions`, `build_status`), Task 3 스크립트 계약.
@@ -836,7 +836,7 @@ git commit -m "feat(perception): vision-3090 쪽 기동 스크립트 repo 화 + 
 
 - [ ] **Step 1: 런처 노드 작성**
 
-`scripts/perception_launcher_node.py`:
+`scripts/nodes/perception_launcher_node.py`:
 
 ```python
 #!/usr/bin/env python3
@@ -1017,7 +1017,7 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: CLI 작성**
 
-`scripts/perception_ctl.py`:
+`scripts/ops/perception_ctl.py`:
 
 ```python
 #!/usr/bin/env python3
@@ -1120,14 +1120,14 @@ if __name__ == "__main__":
 
 - [ ] **Step 3: 문법 확인**
 
-Run: `cd /home/user/rl_ws/sim2real && python3 -m py_compile scripts/perception_launcher_node.py scripts/perception_ctl.py && echo ok`
+Run: `cd /home/user/rl_ws/sim2real && python3 -m py_compile scripts/nodes/perception_launcher_node.py scripts/ops/perception_ctl.py && echo ok`
 Expected: `ok`
 
 - [ ] **Step 4: 커밋**
 
 ```bash
 cd /home/user/rl_ws/sim2real
-git add scripts/perception_launcher_node.py scripts/perception_ctl.py
+git add scripts/nodes/perception_launcher_node.py scripts/ops/perception_ctl.py
 git commit -m "feat(perception): 런처 노드(ssh 실행·status) + perception_ctl CLI"
 ```
 
@@ -1136,7 +1136,7 @@ git commit -m "feat(perception): 런처 노드(ssh 실행·status) + perception_
 ### Task 5: pose 노드 (`object_pose_node.py`)
 
 **Files:**
-- Create: `scripts/object_pose_node.py`
+- Create: `scripts/nodes/object_pose_node.py`
 - Test: `scripts/test_object_pose_node.py`
 
 **Interfaces:**
@@ -1197,7 +1197,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'object_pose_node'`
 
 - [ ] **Step 3: 구현**
 
-`scripts/object_pose_node.py`:
+`scripts/nodes/object_pose_node.py`:
 
 ```python
 #!/usr/bin/env python3
@@ -1331,7 +1331,7 @@ Expected: 모두 passed
 
 ```bash
 cd /home/user/rl_ws/sim2real
-git add scripts/object_pose_node.py scripts/test_object_pose_node.py
+git add scripts/nodes/object_pose_node.py scripts/test_object_pose_node.py
 git commit -m "feat(perception): object_pose_node — 카메라 프레임 → /objects/<name>/pose"
 ```
 

@@ -27,7 +27,7 @@ RA-L 논문 정책(`tesollo/both/pour_sensor`, 양팔·15D)을 실기에 올리�
 | 파일 | 역할 |
 |---|---|
 | `scripts/pour_sensor_bimanual.py` | 차이분 어댑터 — 15D 분해, `LeftTcpController`(누적·클램프·z캡·frozen), receiver 컵 FK |
-| `scripts/pour_sensor_inference.py` | 배포 노드 — `PourInferenceNode` 상속, 좌팔 obs/명령만 덮어씀 |
+| `scripts/nodes/pour_sensor_inference.py` | 배포 노드 — `PourInferenceNode` 상속, 좌팔 obs/명령만 덮어씀 |
 | `scripts/test_pour_sensor_bimanual.py` | 어댑터 46 + drift-guard. 기존 30개와 합쳐 **76 pass** |
 | (재사용) `pour_obs_builder` / `pour_obs_geometry` / `pour_action_decoder` | 무수정 |
 

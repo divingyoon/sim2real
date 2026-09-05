@@ -57,7 +57,7 @@ bash ~/rl_ws/perception_plus_plus/scripts/run_cup_pose_live.sh
 ROS_DOMAIN_ID=126 ros2 topic echo /cup_pose      # ~8 Hz 확인
 
 # ② /cup_pose 가 보이는 머신에서 한 장 붙잡는다 (30 샘플 중앙값)
-python3 scripts/cup_pose_capture.py --out logs/shadow/cup_pose.json
+python3 scripts/calib/cup_pose_capture.py --out logs/shadow/cup_pose.json
 #    → 학습 분포 밖이면 축 이름과 범위를 찍고 **exit 1**
 
 # ③ Isaac (5090) — 그 자리에 컵을 놓고 정책 실행
@@ -103,7 +103,7 @@ git worktree add --detach /tmp/hdgp_bc86ca5 bc86ca5          # 학습 시점 FAB
 반드시 통과해야 한다. 자산이나 라이브러리가 갈리면 여기서 걸린다.
 
 ```bash
-python3 scripts/probe_fabric_deploy_parity.py --sim logs/shadow/sim_fab_test16_gcON.npz
+python3 scripts/probes/probe_fabric_deploy_parity.py --sim logs/shadow/sim_fab_test16_gcON.npz
 ```
 
 기대: `TCP 최대 ≤ 1 mm`. 08.25 실측 **0.152 mm** (§6-4).
@@ -132,7 +132,7 @@ print(*d['meta_task_sha256'], sep='\n'); print(d['meta_fabrics'][0])"
 ## 2. 재생 계획 확인 (하드웨어 불필요, 무발행)
 
 ```bash
-python3 scripts/shadow_replay.py --sim logs/shadow/sim_fab_test16_gcON.npz \
+python3 scripts/nodes/shadow_replay.py --sim logs/shadow/sim_fab_test16_gcON.npz \
     --robot gripper_left --rate-scale 0.25
 ```
 
@@ -148,13 +148,13 @@ python3 scripts/shadow_replay.py --sim logs/shadow/sim_fab_test16_gcON.npz \
 ```bash
 export ROS_DOMAIN_ID=77
 # 터미널 A
-python3 scripts/fake_arm_bridge.py --robot gripper_left --model pd
+python3 scripts/fakes/fake_arm_bridge.py --robot gripper_left --model pd
 # 터미널 B
-python3 scripts/shadow_replay.py --sim logs/shadow/sim_fab_test16_gcON.npz \
+python3 scripts/nodes/shadow_replay.py --sim logs/shadow/sim_fab_test16_gcON.npz \
     --robot gripper_left --rate-scale 0.25 --max-vel 1.2 \
     --log logs/shadow/fake_x025.csv --execute
 # 터미널 C (재생 후)
-python3 scripts/shadow_report.py --sim logs/shadow/sim_fab_test16_gcON.npz \
+python3 scripts/analysis/shadow_report.py --sim logs/shadow/sim_fab_test16_gcON.npz \
     --real logs/shadow/fake_x025.csv
 ```
 
@@ -175,9 +175,9 @@ python3 scripts/shadow_report.py --sim logs/shadow/sim_fab_test16_gcON.npz \
 # 터미널 A
 ros2 launch openarm_bringup openarm.bimanual.launch.py use_fake_hardware:=true
 # 터미널 B — 관절 대시보드
-python3 scripts/joint_monitor.py --arm-topic /joint_states
+python3 scripts/analysis/joint_monitor.py --arm-topic /joint_states
 # 터미널 C
-python3 scripts/shadow_replay.py --sim logs/shadow/sim_fab_test16_gcON.npz \
+python3 scripts/nodes/shadow_replay.py --sim logs/shadow/sim_fab_test16_gcON.npz \
     --robot gripper_left --rate-scale 0.25 --frames 200 \
     --log logs/shadow/fake_x025.csv --execute
 ```
@@ -195,8 +195,8 @@ ros2 launch openarm_bringup openarm.bimanual.launch.py use_fake_hardware:=false 
 
 robotctl pose ready --group openarm_left_arm --execute     # 2단계, 0.1 rad/s
 
-python3 scripts/lowlevel_check.py --robot gripper_left --group arm --dry-run
-python3 scripts/lowlevel_check.py --robot gripper_left --group arm --execute
+python3 scripts/ops/lowlevel_check.py --robot gripper_left --group arm --dry-run
+python3 scripts/ops/lowlevel_check.py --robot gripper_left --group arm --execute
 ```
 
 ⚠ **유휴 우팔을 rest 로 두고 시작한다.** fabric world 가 그 팔을 고정 위치의 구로 세워
@@ -217,7 +217,7 @@ python3 scripts/lowlevel_check.py --robot gripper_left --group arm --execute
 
 ```bash
 for R in 0.10 0.25 0.50; do
-  python3 scripts/shadow_replay.py --sim logs/shadow/sim_fab_test16_gcON.npz \
+  python3 scripts/nodes/shadow_replay.py --sim logs/shadow/sim_fab_test16_gcON.npz \
       --robot gripper_left --rate-scale $R --max-vel 0.5 \
       --log logs/shadow/real_x${R}.csv --execute
 done
@@ -233,7 +233,7 @@ done
 
 ```bash
 for R in 0.10 0.25 0.50; do
-  python3 scripts/shadow_report.py --sim logs/shadow/sim_fab_test16_gcON.npz \
+  python3 scripts/analysis/shadow_report.py --sim logs/shadow/sim_fab_test16_gcON.npz \
       --real logs/shadow/real_x${R}.csv --out logs/shadow/report_x${R}.md
 done
 ```

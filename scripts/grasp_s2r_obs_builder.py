@@ -148,7 +148,8 @@ def _check_tips(name: str, arr) -> np.ndarray:
 def assemble_actor_obs(
     *,
     arm_q, arm_qd,
-    hand_q, hand_qd, hand_target,
+    hand_q, hand_qd,
+    joint_err_profile_order,
     palm_pos, palm_quat,
     tip_pos,
     cup_pos, goal_pos,
@@ -157,12 +158,21 @@ def assemble_actor_obs(
     contact_force_max: float,
     joint_pos_err_max: float,
 ) -> np.ndarray:
-    """155D actor obs. 손 관절 3종(`hand_q`/`hand_qd`/`hand_target`)은 **DOF 순**으로 줄 것."""
+    """155D actor obs.
+
+    ★★**손 순서가 obs 안에서 두 종류다**(09.03 sim 대조로 확정):
+      · `hand_q`/`hand_qd`(슬롯 14~53) — **Isaac DOF 순**(`find_joints` 반환 순)
+      · `joint_err`(슬롯 111~130) — **프로필 순**(`hand_joint_names`, `_syn_ids`)
+      env `_joint_pos_err()` 가 `_syn_ids` 로 재는데 `hand_q` 는 `_hand_ids_t` 로 잰다.
+      그래서 `joint_err` 은 **호출자가 프로필 순으로 만들어** 넘긴다 — 여기서 DOF 순
+      `hand_q` 로 계산하면 20칸이 통째로 스크램블된다. 정책은 죽지 않고 조용히
+      이상하게 돈다. `normalized_joint_err()` 로 만들되 **프로필 순 쌍**을 줄 것.
+    """
     aq = _check("arm_q", arm_q, NUM_ARM_DOF)
     aqd = _check("arm_qd", arm_qd, NUM_ARM_DOF)
     hq = _check("hand_q", hand_q, NUM_HAND_DOF)
     hqd = _check("hand_qd", hand_qd, NUM_HAND_DOF)
-    ht = _check("hand_target", hand_target, NUM_HAND_DOF)
+    jerr = _check("joint_err_profile_order", joint_err_profile_order, NUM_HAND_DOF)
     act = _check("last_action", last_action, NUM_ACTIONS)
     tips = _check_tips("tip_pos", tip_pos)
     palm = _check("palm_pos", palm_pos, 3)
@@ -177,7 +187,7 @@ def assemble_actor_obs(
         cup - palm,
         (tips - cup).reshape(-1),
         tip_force_local(tip_force_world, tip_quat, contact_force_max).reshape(-1),
-        normalized_joint_err(hq, ht, joint_pos_err_max),
+        np.clip(jerr, -1.0, 1.0),
         act,
         goal - cup,
     ])

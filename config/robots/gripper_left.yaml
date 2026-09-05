@@ -16,7 +16,7 @@
 name: gripper_left
 
 asset:
-  manifest: ../hdgp/assets/robot/openarm_tesollo_sensor_rl/openarm_tesollo_sensor_rl_manifest.yaml
+  manifest: ../urdf/generated/rl/openarm_tesollo_sensor_rl_manifest.yaml
   fabrics:
     # sim 학습과 동일 — `grasp_left_preset.FABRIC_ROBOT_DIR` / `FABRIC_WORLD_FILENAME`.
     # 이 URDF 는 손 20관절을 fixed 로 동결해 cspace 가 팔 7 DOF 만 남는다.

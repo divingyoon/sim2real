@@ -17,9 +17,9 @@
 ```bash
 cd ~/rl_ws/sim2real && source /opt/ros/humble/setup.bash && . .venv/bin/activate
 # dry-run 으로 계획 확인 (발행 0)
-python3 scripts/shadow_replay.py --sim logs/shadow/reset_both/reset_left.npz --robot gripper_left --rate-scale 1.0
+python3 scripts/nodes/shadow_replay.py --sim logs/shadow/reset_both/reset_left.npz --robot gripper_left --rate-scale 1.0
 # 실제 실행
-python3 scripts/shadow_replay.py --sim logs/shadow/reset_both/reset_left.npz --robot gripper_left \
+python3 scripts/nodes/shadow_replay.py --sim logs/shadow/reset_both/reset_left.npz --robot gripper_left \
     --rate-scale 1.0 --log logs/shadow/real_reset_left.csv --execute
 ```
 - 끝 자세 = preset 홈 `(-0.0136, -0.3757, -0.0010, +0.9336, -0.4655, +0.0003, -0.3306)` · 그리퍼 0.044(개방)
@@ -29,7 +29,7 @@ python3 scripts/shadow_replay.py --sim logs/shadow/reset_both/reset_left.npz --r
 
 ```bash
 # 1차: rate 0.25 (요구 peak 0.93 rad/s) — 붙는지부터
-python3 scripts/shadow_replay.py --sim logs/shadow/sim_v2H_wide.npz --robot gripper_left \
+python3 scripts/nodes/shadow_replay.py --sim logs/shadow/sim_v2H_wide.npz --robot gripper_left \
     --rate-scale 0.25 --max-vel 1.0 --log logs/shadow/real_v2H_x025.csv --execute
 # 2차: rate 0.5  → --max-vel 2.0
 # 3차: rate 0.53 (bag 등가 속도, 요구 peak 1.98) → --max-vel 2.0
@@ -45,7 +45,7 @@ python3 scripts/shadow_replay.py --sim logs/shadow/sim_v2H_wide.npz --robot grip
 ## ③ 판정 (재생 후, 아무 PC)
 
 ```bash
-python3 scripts/shadow_report.py --sim logs/shadow/sim_v2H_wide.npz --real logs/shadow/real_v2H_x025.csv
+python3 scripts/analysis/shadow_report.py --sim logs/shadow/sim_v2H_wide.npz --real logs/shadow/real_v2H_x025.csv
 ```
 - L3(실팔 vs arm_target) + 지연·지터가 나온다. rate 스윕 비교: 0.25 에서 붙고 1.0 에서
   벌어지면 대역폭, 0.25 에서도 일정 오프셋이면 중력 처짐 — 고치는 노브가 다르다.
@@ -63,11 +63,11 @@ sim 안에서 obs(가상 컵 포함)→정책→액션이 돌고, 실기는 그 
 
 ```bash
 # [A] 이 PC — ROS 어댑터 (venv + ROS)
-python3 scripts/udp_cmd_to_ros.py --port 47311 --log logs/shadow/live_adapter.csv --execute
+python3 scripts/nodes/udp_cmd_to_ros.py --port 47311 --log logs/shadow/live_adapter.csv --execute
 # [B] 로봇 쪽 — 브리지 (기존 재생 사슬과 동일, rate-limit 이 하드 캡)
-python3 scripts/isaacsim_cmd_to_jtc.py --robot gripper_left --max-vel 1.0
+python3 scripts/nodes/isaacsim_cmd_to_jtc.py --robot gripper_left --max-vel 1.0
 # [C] 이 PC — Isaac (★venv 비활성 셸에서!)
-cd ~/rl_ws/IsaacLab && ./isaaclab.sh -p ~/rl_ws/sim2real/scripts/probe_v2_shadow_record.py \
+cd ~/rl_ws/IsaacLab && ./isaaclab.sh -p ~/rl_ws/sim2real/scripts/probes/probe_v2_shadow_record.py \
     --checkpoint ~/rl_ws/sim2real/logs/policy/left_v2H_wide/nn/v2H_wide_best.pth \
     --steps 1500 --out ~/rl_ws/sim2real/logs/shadow/sim_live_run1.npz \
     --stream_udp 47311 --stream_rate_scale 0.25 --gui

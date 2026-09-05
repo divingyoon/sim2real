@@ -60,9 +60,9 @@ ros2 launch isaacsim_bridge isaacsim_bridge.launch.py
 ```bash
 # [터미널 3] 오른팔을 영자세로
 cd $BRIDGE_WS && source install/setup.bash
-python3 scripts/manual_command_pub.py right-arm 0 0 0 0 0 0 0
+python3 scripts/nodes/manual_command_pub.py right-arm 0 0 0 0 0 0 0
 # 관절 하나만 살짝
-python3 scripts/manual_command_pub.py right-arm 0 0 0 0 0 0 0.2
+python3 scripts/nodes/manual_command_pub.py right-arm 0 0 0 0 0 0 0.2
 
 # 병합 상태 확인
 ros2 topic echo /isaacsim/joint_states --once
@@ -110,7 +110,7 @@ ros2 launch isaacsim_bridge isaacsim_bridge.launch.py
 ```bash
 # [터미널 3] 20개 값(엄지→소지, 관절1→4). 모두 0 = 편 손
 cd $BRIDGE_WS && source install/setup.bash
-python3 scripts/manual_command_pub.py right-hand \
+python3 scripts/nodes/manual_command_pub.py right-hand \
     0 0 0 0  0 0 0 0  0 0 0 0  0 0 0 0  0 0 0 0
 
 ros2 topic echo /isaacsim/joint_states --once
@@ -239,7 +239,7 @@ cd $BRIDGE_WS && source install/setup.bash
 ros2 run isaacsim_bridge bridge_node
 
 # [터미널 3] 명령을 넣고 RViz에서 움직임 확인
-python3 $BRIDGE_WS/scripts/manual_command_pub.py right-arm 0 0 0 0 0 0 0.3
+python3 $BRIDGE_WS/scripts/nodes/manual_command_pub.py right-arm 0 0 0 0 0 0 0.3
 ```
 
 Tesollo/RH56F1은 fake hardware가 없어 실물 시리얼/CAN이 필요하다. 정책 배포 전체

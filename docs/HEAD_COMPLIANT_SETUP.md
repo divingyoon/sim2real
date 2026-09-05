@@ -483,7 +483,7 @@ pan_urdf, tilt_urdf = urdf_head_angles(pan_encoder, tilt_encoder)
 ```
 
 캘리브값은 `sim2real/config/head_camera_sim.json` 에서 읽는다(생성:
-`sim2real/scripts/sim_head_camera.py`). 테스트 7개가 **캘리브 파일 존재**와
+`sim2real/scripts/calib/sim_head_camera.py`). 테스트 7개가 **캘리브 파일 존재**와
 **부호 규약**을 고정한다.
 
 ★학습 태스크(`grasp_s2r` 등)는 **고치지 않았다** — 재학습 중이라 건드리면 재생이

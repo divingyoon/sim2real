@@ -34,14 +34,14 @@ ros2 topic echo --once /joint_states | head -30
    원래 정책 홈 궤적 `reset_right_v2.npz` 로 돌아간다 — b1 정책이 요구하는 자세다.
 
 ⇒ 단, 재생 **중에도** 보상이 필요하다. `robotctl pose gravity` 는 정지 유지용이므로
-   `scripts/gravity_comp_node.py`(08.31 신설)를 별도 터미널에서 돌린다:
+   `scripts/nodes/gravity_comp_node.py`(08.31 신설)를 별도 터미널에서 돌린다:
 
 ```bash
 # 터미널 A — 연속 보상(실측 자세로 매 20 ms 재계산, Ctrl-C 시 0 송출)
-python3 scripts/gravity_comp_node.py --payload 0.9130,-0.00450,-0.01723,0.22147 \
+python3 scripts/nodes/gravity_comp_node.py --payload 0.9130,-0.00450,-0.01723,0.22147 \
     --scale 1.0 --execute
 # 터미널 B — 그 위에서 궤적 재생
-python3 scripts/shadow_replay.py --sim logs/shadow/reset_both/reset_right_v2.npz ... --execute
+python3 scripts/nodes/shadow_replay.py --sim logs/shadow/reset_both/reset_right_v2.npz ... --execute
 ```
 
 ## ① 페이로드 실질량 반영 — scale 1.0 검증 (30분)
@@ -53,7 +53,7 @@ python3 scripts/shadow_replay.py --sim logs/shadow/reset_both/reset_right_v2.npz
 ```bash
 # 자세 만들기(재생 먼저 — 처진 상태에서 보상만 켜면 마찰로 안 올라온다)
 cd ~/rl_ws/sim2real && source /opt/ros/humble/setup.bash && . .venv/bin/activate
-python3 scripts/shadow_replay.py --sim logs/shadow/reset_both/reset_right_safe.npz \
+python3 scripts/nodes/shadow_replay.py --sim logs/shadow/reset_both/reset_right_safe.npz \
     --robot tesollo_sensor__right --rate-scale 0.5 --arm-only \
     --allow-idle-arm-mismatch --abort-tracking-err 0.65 --execute
 
@@ -102,10 +102,10 @@ xacro 가 읽는 곳: sim2real/vendor/openarm/openarm_description/config/arm/v10
 
 ```bash
 # 현재 자세 스냅샷(bringup 기준 주먹) — 매번 확인
-python3 scripts/capture_right_hand_pose.py
+python3 scripts/calib/capture_right_hand_pose.py
 
 # 발열이 의심되면 즉시 이완(지령=실측으로 맞춰 버티는 토크를 없앤다)
-python3 scripts/relax_right_hand.py --execute
+python3 scripts/ops/relax_right_hand.py --execute
 ```
 
 **★08.31 미해결 — 엄지 `rj_dg_1_4`**: 자세와 무관하게 effort **38~79**(나머지 19관절은
@@ -129,9 +129,9 @@ python3 scripts/relax_right_hand.py --execute
 | `logs/rosbags/right_preset_{tune1,safe1}` | ACTION/SIM/REAL 3신호 bag |
 | `logs/shadow/reset_both/reset_right_{v2,safe}{,_reverse}.npz` | preset 궤적 4종 |
 | `config/right_hand_fist.yaml` | 실물 주먹 스냅샷(bringup 기준) |
-| `scripts/hand_payload.py` | 손 페이로드 계산 |
-| `scripts/analyze_right_preset_bag.py` | bag 3신호 분석 |
-| `scripts/hold_right_arm.py` · `relax_right_hand.py` | 자세 유지 · 손 토크 이완 |
+| `scripts/calib/hand_payload.py` | 손 페이로드 계산 |
+| `scripts/analysis/analyze_right_preset_bag.py` | bag 3신호 분석 |
+| `scripts/ops/hold_right_arm.py` · `relax_right_hand.py` | 자세 유지 · 손 토크 이완 |
 
 ## 안전 규약 (08.31 확립)
 
@@ -271,13 +271,13 @@ sim 1.31° vs 실기 0.94° 로 여전히 sim 이 못 따라간다. 손목 j5·j
 
 ```bash
 # ① 안전 자세로 이동 (reset_right_v2 를 R② 까지만 재생 — --frames 로 자른다)
-python3 scripts/shadow_replay.py --sim logs/shadow/reset_both/reset_right_v2.npz \
+python3 scripts/nodes/shadow_replay.py --sim logs/shadow/reset_both/reset_right_v2.npz \
     --robot tesollo_sensor__right --rate-scale 0.5 --arm-only --frames 640 \
     --allow-idle-arm-mismatch --execute
 #   (R①어깨올림 180+30 + R②팔꿈치접기 400+30 = 640 프레임)
 
 # ② 여진 수집 — 중력보상을 켜 둔 채로 할 것(sim 이 중력 없는 조건이므로)
-python3 scripts/gravity_comp_node.py --payload 0.9130,-0.00450,-0.01723,0.22147 \
+python3 scripts/nodes/gravity_comp_node.py --payload 0.9130,-0.00450,-0.01723,0.22147 \
     --scale 1.0 --execute      # 터미널 A
 robotctl r2s collect --group openarm_right_arm --amplitude-scale 0.65 \
     --output ~/r2s/right_track_0901.npz --execute    # 터미널 B

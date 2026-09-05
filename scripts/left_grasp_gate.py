@@ -31,11 +31,49 @@ from dataclasses import dataclass
 
 import numpy as np
 
-# ── 학습 preset 상수 (grasp_left_preset.py) ────────────────────────────────
+# ── 학습 preset 상수 ───────────────────────────────────────────────────────
 GRASP_DEPTH_IN_BASE_Z = 0.0469   # 성공 파지 시 컵 축의 base z (실측 중앙값)
 JAW_FINGER_BODY_Z = 0.015        # 손가락 강체 원점의 base z
 JAW_PAD_OFFSET = GRASP_DEPTH_IN_BASE_Z - JAW_FINGER_BODY_Z      # 0.0319 m
-CUP_GRASP_BAND_AXIS = (-0.08209, -0.00709)   # 컵 원점 기준 축 좌표 대역 (m)
+
+# ★★파지 대역은 **v2_preset 이 기본 preset 을 덮어쓴다.** 기본(v1)은 판 위 10~85 mm,
+#   v2E29 는 판 위 80~150 mm 다(체크포인트 이름의 "band80" 이 그 뜻이다).
+#   09.03 실기: v1 값을 쓰는 바람에 정책이 판 위 115 mm 를 조준하는데 게이트는
+#   10~85 mm 를 요구해 **한 번도 열리지 않았다** — 그리퍼가 영원히 벌어진 채였다.
+#   v2_env_cfg.py 주석이 이 실패 모드를 이미 경고하고 있었다:
+#     "보상만 바꾸고 그리퍼 게이트를 두면 보상은 받는데 그리퍼가 안 열린다".
+#   ⚠ 다른 체크포인트를 배포하면 그 런의 트랙(v1/v2)을 확인해 이 값을 맞출 것.
+CUP_BOTTOM_TO_ORIGIN = 0.09209   # 컵 바닥 → 원점 (shaker_closed_rl)
+
+#: 트랙별 파지 높이 대역(판 위 m). ★dump 에는 `grasp_band` 가 직렬화되지 않고 액션
+#: 클래스 경로도 두 트랙이 같아서, **`agent.yaml` 의 태스크 이름만이 신뢰할 수 있는
+#: 신호**다. 모르는 트랙은 추측하지 말고 죽인다.
+GRASP_HEIGHT_BAND_BY_TASK = {
+    "open-grip_l_grasp_sensor_v2": (0.080, 0.150),   # v2_preset 이 덮어쓴 값
+    "open-grip_l_grasp_sensor_fab": (0.010, 0.085),  # cfg 기본 None → v1 대역
+    "open-grip_l_grasp_sensor": (0.010, 0.085),
+}
+GRASP_HEIGHT_BAND = GRASP_HEIGHT_BAND_BY_TASK["open-grip_l_grasp_sensor_v2"]
+CUP_GRASP_BAND_AXIS = (GRASP_HEIGHT_BAND[0] - CUP_BOTTOM_TO_ORIGIN,
+                       GRASP_HEIGHT_BAND[1] - CUP_BOTTOM_TO_ORIGIN)
+
+
+def band_axis_from_run(agent_yaml_path) -> tuple[float, float]:
+    """런의 `agent.yaml` 태스크 이름으로 파지 대역(컵 원점 기준 축좌표)을 고른다."""
+    import re
+    from pathlib import Path as _P
+
+    text = _P(agent_yaml_path).read_text()
+    m = re.search(r"^\s*name:\s*(open-grip_l_[a-z0-9_]+)\s*$", text, re.M)
+    if m is None:
+        raise SystemExit(f"[gate] {agent_yaml_path} 에서 태스크 이름을 못 읽었다")
+    task = m.group(1)
+    if task not in GRASP_HEIGHT_BAND_BY_TASK:
+        raise SystemExit(
+            f"[gate] 모르는 트랙 `{task}` — 파지 대역을 추측할 수 없다. "
+            "그 트랙의 preset(GRASP_HEIGHT_BAND)을 확인해 등록하라")
+    lo, hi = GRASP_HEIGHT_BAND_BY_TASK[task]
+    return (lo - CUP_BOTTOM_TO_ORIGIN, hi - CUP_BOTTOM_TO_ORIGIN)
 LATERAL_OK = 0.03                # dump: lateral_ok
 ALONG_OK = 0.03                  # dump: along_ok
 

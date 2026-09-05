@@ -138,7 +138,7 @@ ros2 launch openarm_bringup openarm.bimanual.launch.py use_fake_hardware:=false
 ### A4. tip 접촉 변환 노드 (★손끝 무접촉 상태에서 기동 — bias 캡처)
 
 ```bash
-python3 ~/rl_ws/sim2real/scripts/tip_contact_pub.py --robot tesollo_sensor__right
+python3 ~/rl_ws/sim2real/scripts/nodes/tip_contact_pub.py --robot tesollo_sensor__right
 # bias 재캡처(무접촉 자세에서): ros2 service call /tip_contact/rebias std_srvs/srv/Trigger
 # 검증: ros2 topic echo /dg5f_right/tip_forces_xyz --once  → 15D(5×3), 무접촉 ~0,
 #       컵 누르면 해당 tip 3축이 움직임. (5D norm 은 /dg5f_right/contact_forces 로 병행 발행)
@@ -150,7 +150,7 @@ python3 ~/rl_ws/sim2real/scripts/tip_contact_pub.py --robot tesollo_sensor__righ
 
 ```bash
 pkill -f isaacsim_cmd_to_jtc; sleep 1
-python3 ~/rl_ws/sim2real/scripts/isaacsim_cmd_to_jtc.py --robot tesollo_sensor__right --max-vel 0.1
+python3 ~/rl_ws/sim2real/scripts/nodes/isaacsim_cmd_to_jtc.py --robot tesollo_sensor__right --max-vel 0.1
 ```
 
 - max_vel 0.1은 후퇴 원인 아님(08.03 재현 실험으로 무죄 판정) — 그대로 시작, 추종지연 체감 시 상향.
@@ -164,7 +164,7 @@ python3 ~/rl_ws/sim2real/scripts/isaacsim_cmd_to_jtc.py --robot tesollo_sensor__
 ### A6. 관측(권장, 매 실행 병행)
 
 ```bash
-python3 ~/rl_ws/sim2real/scripts/joint_monitor.py    # 로그 sim2real/logs/*.csv
+python3 ~/rl_ws/sim2real/scripts/analysis/joint_monitor.py    # 로그 sim2real/logs/*.csv
 ```
 
 ---
@@ -182,9 +182,9 @@ ros2 launch realsense2_camera rs_launch.py align_depth.enable:=true
 # 터미널3: FP++ 컨테이너 + relay 일괄 (컨테이너 fpp_cup + /tmp/run_relay.sh detached)
 ~/rl_ws/perception_plus_plus/scripts/run_cup_pose_live.sh
 # 터미널3-1: ★상태 워처 상시 유지 — 🟢 8Hz 정상 / 🔴 STALL=YOLO 검출 손실(가림·시야밖)
-python3 ~/rl_ws/sim2real/scripts/cup_pose_watch.py
+python3 ~/rl_ws/sim2real/scripts/vision/cup_pose_watch.py
 # 터미널3-2: (GUI) RGB 라이브 + 추적 오버레이 — 영상 위 초록 십자선=추적 중
-python3 ~/rl_ws/sim2real/scripts/cup_view.py
+python3 ~/rl_ws/sim2real/scripts/vision/cup_view.py
 ```
 
 - **첫 검출까지 ~50s 걸림**(실측 51s) — 그 전에 start 하면 "미수신 /cup_pose" 거부(정상).
@@ -197,14 +197,14 @@ python3 ~/rl_ws/sim2real/scripts/cup_view.py
 
 (b) fake (플러밍 테스트 전용):
 ```bash
-python3 ~/rl_ws/sim2real/scripts/fake_cup_pose_pub.py --x 0.40 --y -0.15 --z 0.38
+python3 ~/rl_ws/sim2real/scripts/fakes/fake_cup_pose_pub.py --x 0.40 --y -0.15 --z 0.38
 ```
 
 ### B2. (손 분리 테스트 시에만) fake 손
 
 ```bash
-python3 ~/rl_ws/sim2real/scripts/fake_hand_state_pub.py          # APPROACH 정적
-python3 ~/rl_ws/sim2real/scripts/fake_hand_state_pub.py --echo   # 손 명령 반사(진화 obs)
+python3 ~/rl_ws/sim2real/scripts/fakes/fake_hand_state_pub.py          # APPROACH 정적
+python3 ~/rl_ws/sim2real/scripts/fakes/fake_hand_state_pub.py --echo   # 손 명령 반사(진화 obs)
 ```
 
 - 실손 세션에서는 금지(드라이버와 토픽 충돌). 실손+접촉만 없을 땐 fake_tip_contact_pub 대신
@@ -219,7 +219,7 @@ export ROS_DOMAIN_ID=126
 export FASTRTPS_DEFAULT_PROFILES_FILE=$HOME/fastdds_wired.xml
 # ⚠️ 아래 lstm_test3 경로는 존재하지 않는다.
 #    현행 대상 = log/rl_games/open-tesol/right/grasp-sensor/lstm_test1 (학습 중, 로컬 5090)
-python3 ~/rl_ws/sim2real/scripts/grasp_inference.py \
+python3 ~/rl_ws/sim2real/scripts/nodes/grasp_inference.py \
   --robot tesollo_sensor__right \
   --agent <grasp-sensor run>/params/agent.yaml \
   --ckpt  <재학습 run>/nn/<최종>.pth \
@@ -266,7 +266,7 @@ ros2 service call /grasp/start std_srvs/srv/Trigger    # /grasp/stop, /grasp/res
 
 ```bash
 # 폐루프 재현기(정책+Fabrics+mock팔): max_vel/손모드/지연 ablation
-/home/user/rl_ws/IsaacLab/isaaclab.sh -p /home/user/rl_ws/sim2real/scripts/grasp_loop_sim.py \
+/home/user/rl_ws/IsaacLab/isaaclab.sh -p /home/user/rl_ws/sim2real/scripts/analysis/grasp_loop_sim.py \
   --agent <agent.yaml> --ckpt <ckpt.pth> --max-vel 0.1 --hand-mode static|zero|echo [--obs-delay 6]
 
 # Isaac 죽은 손 probe

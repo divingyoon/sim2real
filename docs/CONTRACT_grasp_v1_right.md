@@ -1,6 +1,6 @@
 # 배포 계약 — `tesollo_bi_s__right`
 
-> 이 파일은 `scripts/report_contract.py` 가 구성 프로필과 hdgp 소스에서 **생성**한다.
+> 이 파일은 `scripts/analysis/report_contract.py` 가 구성 프로필과 hdgp 소스에서 **생성**한다.
 > 손으로 고치지 말 것 — 값이 바뀌면 다시 생성하라.
 
 ## 로봇 구성

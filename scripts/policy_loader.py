@@ -21,7 +21,6 @@ import yaml
 import torch
 
 from rl_games.algos_torch.model_builder import ModelBuilder
-from rl_games.algos_torch import torch_ext
 
 
 # ---------------------------------------------------------------------------
@@ -74,8 +73,17 @@ class RLGamesActorPolicy:
         obs_dim: int = 106,
         action_dim: int = 11,
         device: str = "cuda:0",
+        action_clip: float | None = 1.0,
     ) -> None:
         self.device = device
+        # ★★액션을 ±1 로 자르면 **다음 스텝 obs 가 틀린다.** 학습 obs 의 `last_action`
+        #   은 정책 원출력(mu)을 그대로 담는다 — IsaacLab 래퍼의 clip 은 agent.yaml 의
+        #   `params.env.clip_actions`(우리 런은 100.0)라 사실상 자르지 않는다.
+        #   09.03 실측: sim 의 last_action 이 −2.4045 였는데 배포는 −1.0 을 넣고 있었다.
+        #   그래서 step 0 은 완전히 일치하고 step 1 부터 갈라져, 팜 지령이 박스
+        #   최솟값에 붙은 채 팔이 테이블까지 내려갔다.
+        #   ⚠기본값 1.0 은 기존 호출부(우팔 grasp_inference) 호환을 위해 유지한다.
+        self.action_clip = action_clip
 
         # ---- yaml 파싱 ----
         with open(agent_yaml_path, "r") as f:
@@ -100,7 +108,11 @@ class RLGamesActorPolicy:
         self.model.eval()
 
         # ---- 체크포인트 로드 ----
-        weights = torch_ext.load_checkpoint(checkpoint_path)
+        # ★torch 2.6 부터 `torch.load` 의 weights_only 기본값이 True 로 바뀌었고
+        #   rl_games 의 safe_load 는 그 인자를 넘기지 않는다 → 우리 체크포인트가
+        #   "give up after 5 attempts" 로 죽는다(2026-09-03 torch 2.7.1 실측).
+        #   체크포인트는 우리가 학습해 만든 신뢰된 파일이므로 직접 연다.
+        weights = torch.load(checkpoint_path, map_location=device, weights_only=False)
         adjusted = _adjust_state_dict_keys(weights["model"], self.model.state_dict())
         self.model.load_state_dict(adjusted, strict=False)
 
@@ -148,7 +160,9 @@ class RLGamesActorPolicy:
         """
         obs = obs.to(self.device, dtype=torch.float32)
         mu = self._forward(obs)
-        return mu.clamp(-1.0, 1.0)
+        if self.action_clip is None:
+            return mu
+        return mu.clamp(-self.action_clip, self.action_clip)
 
 
 class RLGamesLstmActorPolicy(RLGamesActorPolicy):

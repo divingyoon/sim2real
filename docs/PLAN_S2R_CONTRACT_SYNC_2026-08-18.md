@@ -153,7 +153,7 @@ cd /home/user/rl_ws/sim2real && python3 -m pytest scripts/test_grasp_obs_builder
 
 ### 대상
 - `scripts/tip_contact_core.py` (72줄) — 현재 `norm(f - bias)` 스칼라 (`:66-69`)
-- `scripts/tip_contact_pub.py` (101줄) — `/dg5f_right/contact_forces` 5D `Float64MultiArray` (`:41`)
+- `scripts/nodes/tip_contact_pub.py` (101줄) — `/dg5f_right/contact_forces` 5D `Float64MultiArray` (`:41`)
 
 ### 변경
 
@@ -191,7 +191,7 @@ bias 제거는 유지하고 **norm 을 취하지 말고 3축 벡터를 그대로
 ### 대상
 - `scripts/grasp_action_decoder.py:120-180` (`GraspFingerController`)
 - `scripts/test_grasp_action_decoder.py` (5D 전제)
-- `scripts/grasp_inference.py:209` `action_dim=11`, `:290,:460` `np.zeros(11)`
+- `scripts/nodes/grasp_inference.py:209` `action_dim=11`, `:290,:460` `np.zeros(11)`
 
 ### sim 의 정답 (`grasp_right_env.py:880-896, 1000-1039`)
 
@@ -293,7 +293,7 @@ pose6 = np.concatenate([RESET_HOME_PALM_POSE[:3],
 
 ### 검증 (하드웨어 없이)
 
-`scripts/grasp_loop_sim.py` 오프라인 폐루프 재현기로:
+`scripts/analysis/grasp_loop_sim.py` 오프라인 폐루프 재현기로:
 - 홈에서 시작해 액션 y 가 컵 방향으로 갈 때 palm 이 실제로 컵 y 까지 도달하는지
   (±0.35 가 있어야 도달, ±0.15 면 못 감 — 이게 회귀 테스트가 된다)
 - `grasp_loop_sim.py:100` 의 `action_dim` 도 21 로 갱신 필요
@@ -399,7 +399,7 @@ Step 2 를 먼저 하는 이유: obs 빌더가 3축 힘을 입력으로 받으�
 
 ```bash
 cd /home/user/rl_ws/sim2real && python3 -m pytest scripts/ -q
-IsaacLab/isaaclab.sh -p scripts/grasp_loop_sim.py      # 오프라인 폐루프
+IsaacLab/isaaclab.sh -p scripts/analysis/grasp_loop_sim.py      # 오프라인 폐루프
 ```
 
 ---

@@ -28,9 +28,9 @@ from pathlib import Path
 import numpy as np
 
 from gripper_left_palm_command import PalmCommand, PalmCommandCfg, cfg_from_run
-from left_grasp_gate import GateCfg, GraspGate
+from left_grasp_gate import CUP_GRASP_BAND_AXIS, GateCfg, GraspGate, band_axis_from_run
 from left_gripper_fk import LeftGripperFK
-from left_obs_builder import assemble_actor_obs
+from left_obs_builder import assemble_actor_obs, segments_from_run
 
 NUM_ACTIONS = 7
 GRIPPER_OPEN = 0.044      # dump: open_command_expr
@@ -100,6 +100,7 @@ class LeftPolicyCore:
         fabric=None,                 # callable: palm(6,) -> arm_q_target(7,)
         run_env_yaml,
         goal7,
+        run_agent_yaml=None,         # ★파지 대역은 태스크 이름으로만 갈린다
         urdf_path=None,
         fk: LeftGripperFK | None = None,
         palm_cfg: PalmCommandCfg | None = None,
@@ -111,7 +112,14 @@ class LeftPolicyCore:
         self.goal7 = np.asarray(goal7, dtype=np.float64).reshape(7)
         self.fk = fk or (LeftGripperFK(urdf_path) if urdf_path else LeftGripperFK())
         self.palm = PalmCommand(palm_cfg or cfg_from_run(run_env_yaml))
-        self.gate = GraspGate(gate_cfg or GateCfg(release_lateral=RELEASE_LATERAL))
+        if gate_cfg is None:
+            band = (band_axis_from_run(run_agent_yaml) if run_agent_yaml is not None
+                    else CUP_GRASP_BAND_AXIS)
+            gate_cfg = GateCfg(release_lateral=RELEASE_LATERAL, band_axis=band)
+        self.gate = GraspGate(gate_cfg)
+        # ★관측 레이아웃도 런이 정한다 — 트랙마다 항이 다르다(v2 49D · fab 45D).
+        self.segments = segments_from_run(run_env_yaml)
+        self.obs_dim = sum(d for _, d in self.segments)
         # 관측은 팔7 + 그리퍼2 = 9칸을 **기본자세 대비 상대**로 쓴다.
         self._q_default = np.concatenate([self.home, [GRIPPER_OPEN, GRIPPER_OPEN]])
         self._qd_default = np.zeros(9)
@@ -145,6 +153,7 @@ class LeftPolicyCore:
             gripper_base_pos=poses.base_pos, gripper_base_quat=poses.base_quat,
             last_action=self._last_action, gripper_gate=self.gate.obs_value,
             palm_box=PALM_BOX,
+            segments=self.segments,
         )
 
         action = np.asarray(self.policy(obs), dtype=np.float64).reshape(-1)

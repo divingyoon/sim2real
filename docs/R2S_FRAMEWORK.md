@@ -8,9 +8,9 @@
 
 ```bash
 cd /home/user/rl_ws/sim2real
-python3 scripts/r2s_pipeline.py --stage all      # fit→apply→verify→report
-python3 scripts/r2s_pipeline.py --stage fit      # 해석만(GPU 불필요, 초 단위)
-python3 scripts/r2s_pipeline.py --stage report   # 이미 있는 결과로 판정만
+python3 scripts/analysis/r2s_pipeline.py --stage all      # fit→apply→verify→report
+python3 scripts/analysis/r2s_pipeline.py --stage fit      # 해석만(GPU 불필요, 초 단위)
+python3 scripts/analysis/r2s_pipeline.py --stage report   # 이미 있는 결과로 판정만
 ```
 
 ## 파이프라인
@@ -149,8 +149,8 @@ armature 0 · friction 0
 | **★확정** | **4.5** | **0** | **0** | 아래 |
 
 ```bash
-python3 scripts/apply_hand_gains.py --execute      # bringup 이후 매번
-python3 scripts/apply_hand_gains.py --restore --execute   # 벤더 기본으로
+python3 scripts/ops/apply_hand_gains.py --execute      # bringup 이후 매번
+python3 scripts/ops/apply_hand_gains.py --restore --execute   # 벤더 기본으로
 ```
 
 ⚠**bringup 을 다시 하면 벤더 기본(1.5)으로 돌아간다.** vendor yaml 은 고치지 않았다.
@@ -249,18 +249,18 @@ thumb {_3,_4}   index {_2,_3,_4}   middle {_2,_3,_4}   ring {_2,_3,_4}   pinky {
 
 | 파일 | 역할 |
 |---|---|
-| `scripts/r2s_pipeline.py` | 오케스트레이터. 위 5단계 |
-| `scripts/fit_excite_model.py` | 2차 모델 fit(±마찰). `--kp` 로 kp 주입 |
-| `scripts/probe_excite_sim_replay.py` | 여진을 **물리 dt 격자**로 sim 재생. `--num-envs N --kd-scale lo,hi` 로 6분에 N개 조합 스윕 |
-| `scripts/probe_s2r_gain_replay.py` | 궤적 재생(정적 추종) |
-| `scripts/probe_excite_clearance.py` | 여진 전 안전 판정(자세·진폭) |
-| `scripts/gravity_comp_node.py` | 실기 연속 중력보상(collect 중 필수) |
+| `scripts/analysis/r2s_pipeline.py` | 오케스트레이터. 위 5단계 |
+| `scripts/analysis/fit_excite_model.py` | 2차 모델 fit(±마찰). `--kp` 로 kp 주입 |
+| `scripts/probes/probe_excite_sim_replay.py` | 여진을 **물리 dt 격자**로 sim 재생. `--num-envs N --kd-scale lo,hi` 로 6분에 N개 조합 스윕 |
+| `scripts/probes/probe_s2r_gain_replay.py` | 궤적 재생(정적 추종) |
+| `scripts/probes/probe_excite_clearance.py` | 여진 전 안전 판정(자세·진폭) |
+| `scripts/nodes/gravity_comp_node.py` | 실기 연속 중력보상(collect 중 필수) |
 | **손** | |
-| `scripts/apply_hand_gains.py` | 확정 게인(p=4.5·d=0) 적용 — bringup 이후 매번 |
-| `scripts/probe_hand_multi_gain.py` | ★**다관절 동시** 게인 시험(진동 σ 측정 + 응답 기록) |
-| `scripts/probe_hand_gain_sweep.py` | 단일 관절 게인 스윕 — 진동은 못 잡으니 보조로만 |
-| `scripts/probe_hand_sim_replay.py` | 실기 손 응답을 sim 에서 재생해 대조 |
-| `scripts/probe_hand_range.py` | 가동범위 측정(관절별 한계·온도 상한·휴식) |
+| `scripts/ops/apply_hand_gains.py` | 확정 게인(p=4.5·d=0) 적용 — bringup 이후 매번 |
+| `scripts/probes/probe_hand_multi_gain.py` | ★**다관절 동시** 게인 시험(진동 σ 측정 + 응답 기록) |
+| `scripts/probes/probe_hand_gain_sweep.py` | 단일 관절 게인 스윕 — 진동은 못 잡으니 보조로만 |
+| `scripts/probes/probe_hand_sim_replay.py` | 실기 손 응답을 sim 에서 재생해 대조 |
+| `scripts/probes/probe_hand_range.py` | 가동범위 측정(관절별 한계·온도 상한·휴식) |
 
 ★`probe_s2r_gain_replay.py` 로 **여진을** 재생하면 안 된다 — 지령당 `env.step_dt`
 (16.7 ms)를 쓰는데 여진 지령은 10 ms 간격이라 시간축이 1.67배 늘어난다.

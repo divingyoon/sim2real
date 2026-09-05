@@ -39,7 +39,7 @@
 
 ## ★ 자세 선정 — 왜 R3 인가
 
-`scripts/probe_excite_clearance.py` 로 계산했다. 여진이 **최저점을 얼마나 더 내리는지**(Δz):
+`scripts/probes/probe_excite_clearance.py` 로 계산했다. 여진이 **최저점을 얼마나 더 내리는지**(Δz):
 
 | 자세 | 홈대비 높이 | Δz@0.30 | Δz@0.65 | Δz@1.00 | 최저 링크 |
 |---|---|---|---|---|---|
@@ -96,10 +96,10 @@ $R/.venv/bin/robotctl r2s collect --group openarm_right_arm \
 ```bash
 cd /home/user/rl_ws/sim2real
 # 터미널 A — 연속 중력보상 (Ctrl-C 시 0 송출)
-python3 scripts/gravity_comp_node.py --payload 0.9130,-0.00450,-0.01723,0.22147 \
+python3 scripts/nodes/gravity_comp_node.py --payload 0.9130,-0.00450,-0.01723,0.22147 \
     --scale 1.0 --execute
 # 터미널 B
-python3 scripts/shadow_replay.py --sim logs/shadow/reset_both/reset_right_to_R3.npz \
+python3 scripts/nodes/shadow_replay.py --sim logs/shadow/reset_both/reset_right_to_R3.npz \
     --robot tesollo_sensor__right --arm-only --rate-scale 0.5 \
     --abort-tracking-err 0.3 --execute
 ```
@@ -123,7 +123,7 @@ $R/.venv/bin/robotctl r2s collect --group openarm_right_arm \
 ### 4) 차렷 복귀
 
 ```bash
-python3 scripts/shadow_replay.py --sim logs/shadow/reset_both/reset_right_to_R3_reverse.npz \
+python3 scripts/nodes/shadow_replay.py --sim logs/shadow/reset_both/reset_right_to_R3_reverse.npz \
     --robot tesollo_sensor__right --arm-only --rate-scale 0.5 \
     --abort-tracking-err 0.3 --execute
 ```
@@ -184,10 +184,10 @@ R3 에서 j6 은 지령 0.706, 실측 0.7185(중력보상 처짐으로 +0.72° �
 
 | 항목 | 상태 |
 |---|---|
-| `scripts/probe_excite_clearance.py` | ✅ 신규. 여진 Δz 계산·자세 비교 |
+| `scripts/probes/probe_excite_clearance.py` | ✅ 신규. 여진 Δz 계산·자세 비교 |
 | `logs/shadow/reset_both/reset_right_to_R3.npz` | ✅ 신규. 차렷 → R3, 811 프레임 |
 | `logs/shadow/reset_both/reset_right_to_R3_reverse.npz` | ✅ 신규. R3 → 차렷 |
-| `scripts/gravity_comp_node.py` | ✅ 08.31. 연속 보상 |
+| `scripts/nodes/gravity_comp_node.py` | ✅ 08.31. 연속 보상 |
 | `robotctl r2s collect` | ✅ 기존. `--dry-run` 으로 먼저 확인 |
 | 자기충돌 검증 | ⬜ 미검증 — 눈으로 볼 것 |
 

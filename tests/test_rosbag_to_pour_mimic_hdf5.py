@@ -7,7 +7,7 @@ import h5py
 import numpy as np
 
 
-SCRIPT = Path("/home/user/rl_ws/sim2real/scripts/rosbag_to_pour_mimic_hdf5.py")
+SCRIPT = Path("/home/user/rl_ws/sim2real/scripts/ops/rosbag_to_pour_mimic_hdf5.py")
 
 
 def _load_converter():

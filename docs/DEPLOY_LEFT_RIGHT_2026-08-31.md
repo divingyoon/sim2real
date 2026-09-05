@@ -43,16 +43,16 @@
 cd ~/rl_ws/sim2real && source /opt/ros/humble/setup.bash && . .venv/bin/activate
 
 # ① 좌팔이 preset 에 있다면 먼저 차렷으로 (역재생, 52.1 s · peak 0.25 rad/s)
-python3 scripts/shadow_replay.py --sim logs/shadow/reset_both/reset_left_reverse.npz \
+python3 scripts/nodes/shadow_replay.py --sim logs/shadow/reset_both/reset_left_reverse.npz \
     --robot gripper_left --rate-scale 1.0 --allow-idle-arm-mismatch --execute
 
 # ② 우팔 차렷 → rest(j2 0.3 · j4 2.0)  (104 s @0.5 · peak 0.125 rad/s)
-python3 scripts/shadow_replay.py --sim logs/shadow/reset_both/reset_right.npz \
+python3 scripts/nodes/shadow_replay.py --sim logs/shadow/reset_both/reset_right.npz \
     --robot tesollo_sensor__right --rate-scale 0.5 --arm-only \
     --allow-idle-arm-mismatch --execute
 
 # ③ 우팔 rest → 차렷 복귀  (208 s @0.25 · ★임계 0.55 필수)
-python3 scripts/shadow_replay.py --sim logs/shadow/reset_both/reset_right_reverse.npz \
+python3 scripts/nodes/shadow_replay.py --sim logs/shadow/reset_both/reset_right_reverse.npz \
     --robot tesollo_sensor__right --rate-scale 0.25 --arm-only \
     --allow-idle-arm-mismatch --abort-tracking-err 0.55 --execute
 ```
@@ -93,7 +93,7 @@ python3 scripts/shadow_replay.py --sim logs/shadow/reset_both/reset_right_revers
 
 ```bash
 # 우팔 preset (실기)
-python3 scripts/shadow_replay.py --sim logs/shadow/reset_both/reset_right_v2.npz \
+python3 scripts/nodes/shadow_replay.py --sim logs/shadow/reset_both/reset_right_v2.npz \
     --robot tesollo_sensor__right --rate-scale 0.5 --arm-only \
     --allow-idle-arm-mismatch --execute
 ```
@@ -117,8 +117,8 @@ ros2 launch dg5f_driver dg5f_right_driver.launch.py delto_ip:=169.254.186.72
 베이스에 닿지 않는 자세. 그 자세를 스냅샷해 이후 모든 bringup 의 기준으로 삼는다.
 
 ```bash
-python3 scripts/capture_right_hand_pose.py          # 확인만
-python3 scripts/capture_right_hand_pose.py --save   # → config/right_hand_fist.yaml
+python3 scripts/calib/capture_right_hand_pose.py          # 확인만
+python3 scripts/calib/capture_right_hand_pose.py --save   # → config/right_hand_fist.yaml
 ```
 
 **팔·손 순서**: ①전 구간 **주먹 유지**로 팔 이동 → ②홈 안착 후 **손 펴기**.
@@ -129,7 +129,7 @@ python3 scripts/capture_right_hand_pose.py --save   # → config/right_hand_fist
 
 ```bash
 # 손 포함 재생 (1474프레임 · 58.9 s @0.5)
-python3 scripts/shadow_replay.py --sim logs/shadow/reset_both/reset_right_v2.npz \
+python3 scripts/nodes/shadow_replay.py --sim logs/shadow/reset_both/reset_right_v2.npz \
     --robot tesollo_sensor__right --rate-scale 0.5 --with-hand \
     --allow-idle-arm-mismatch --abort-tracking-err 0.55 --execute
 # 손 전원이 없을 때만 --arm-only (손 채널 미발행)
@@ -144,8 +144,8 @@ shadow_replay/정책 ─ROS /isaacsim/*_cmd─▶ 실기 JTC (기존)
 
 ```bash
 # ① Isaac 미러 (venv 없는 셸, GUI 상시 유지)
-cd ~/rl_ws/IsaacLab && ./isaaclab.sh -p ~/rl_ws/sim2real/scripts/probe_sim_follower.py
+cd ~/rl_ws/IsaacLab && ./isaaclab.sh -p ~/rl_ws/sim2real/scripts/probes/probe_sim_follower.py
 # ② ROS→UDP 어댑터 (ROS 셸)
-python3 ~/rl_ws/sim2real/scripts/ros_cmd_to_udp.py
+python3 ~/rl_ws/sim2real/scripts/nodes/ros_cmd_to_udp.py
 # ③ 그 다음 shadow_replay --execute 를 돌리면 sim·실기가 같은 지령을 받는다
 ```

@@ -8,9 +8,9 @@
 # ★정책은 하드코딩하지 않는다. 아래 `checkpoints` 한 곳만 고치면 교체된다.
 #   md5 가 다르면 가드가 거부한다 — 바꿔 끼웠는데 조용히 옛것으로 도는 사고를 막는다.
 #
-# 실행:  python3 scripts/mission_run.py --plan          # 전체 판정 (아무것도 발행 안 함)
-#        python3 scripts/mission_run.py --stage <id>    # 그 단계의 명령만 출력
-#        python3 scripts/mission_run.py --stage <id> --execute --approve <id>
+# 실행:  python3 scripts/ops/mission_run.py --plan          # 전체 판정 (아무것도 발행 안 함)
+#        python3 scripts/ops/mission_run.py --stage <id>    # 그 단계의 명령만 출력
+#        python3 scripts/ops/mission_run.py --stage <id> --execute --approve <id>
 
 name: 양팔 물붓기
 loop_to: perceive
@@ -134,7 +134,7 @@ stages:
     blocked: >-
       place 가 정의되어 있지 않다. grasp_inference.py 의 PLACING(명령 궤적 역재생)이
       유일한 구현인데 그것은 grasp 에피소드 내부용이라 pour 이후 상태를 모른다.
-    evidence: scripts/grasp_inference.py
+    evidence: scripts/nodes/grasp_inference.py
 
 # ── 단계별 명령 ────────────────────────────────────────────────────────────
 # manual: 러너가 절대 실행하지 않는다 (sudo·다른 PC·venv 없는 셸). 화면에 띄우고 확인만.
@@ -162,28 +162,28 @@ run:
 
   gains:
     - note: 테솔로 우손 JTC PID p=4.5 (bringup 마다 재적용 — RAM 이다)
-      argv: [python3, "{repo}/scripts/apply_hand_gains.py", --p, "4.5", --d, "0"]
+      argv: [python3, "{repo}/scripts/ops/apply_hand_gains.py", --p, "4.5", --d, "0"]
       execute_args: [--execute]
 
   lowlevel:
     - note: 기동 자세 확인 (TEST0 · 발행 없음)
-      argv: [python3, "{repo}/scripts/lowlevel_check.py", --robot, tesollo_sensor__right]
+      argv: [python3, "{repo}/scripts/ops/lowlevel_check.py", --robot, tesollo_sensor__right]
 
   preset_right:
     - note: 연속 중력보상 — 재생 내내 살아 있어야 한다
-      argv: [python3, "{repo}/scripts/gravity_comp_node.py", --robot, tesollo_sensor__right]
+      argv: [python3, "{repo}/scripts/nodes/gravity_comp_node.py", --robot, tesollo_sensor__right]
       execute_args: [--execute]
       background: true
     - note: 우팔 차렷 → preset 홈 (4구간 · 손은 들어 올린 경유점에서 편다)
       argv:
-        [python3, "{repo}/scripts/shadow_replay.py", --sim, "{artifact:reset_right_npz}",
+        [python3, "{repo}/scripts/nodes/shadow_replay.py", --sim, "{artifact:reset_right_npz}",
          --robot, tesollo_sensor__right, --rate-scale, "1.0", --allow-idle-arm-mismatch]
       execute_args: [--execute]
 
   preset_left:
     - note: 좌팔 차렷 → preset 홈 (2605프레임 · 52.1 s · peak 0.25 rad/s)
       argv:
-        [python3, "{repo}/scripts/shadow_replay.py", --sim, "{artifact:reset_left_npz}",
+        [python3, "{repo}/scripts/nodes/shadow_replay.py", --sim, "{artifact:reset_left_npz}",
          --robot, gripper_left, --rate-scale, "1.0", --allow-idle-arm-mismatch]
       execute_args: [--execute]
 
@@ -201,20 +201,20 @@ run:
         # ★HDGP_V2_VENDOR_GAINS=1 필수 — v2B25 는 실기 벤더 게인으로 학습됐고, 없이 돌리면
         #   팔이 4~30배 뻣뻣해져 컵을 쳐낸다(09.01 실측 0/8 → 8/8).
         [env, "HDGP_V2_VENDOR_GAINS=1",
-         "{repo}/../IsaacLab/isaaclab.sh", -p, "{repo}/scripts/probe_v2_shadow_record.py",
+         "{repo}/../IsaacLab/isaaclab.sh", -p, "{repo}/scripts/probes/probe_v2_shadow_record.py",
          --checkpoint, "{checkpoint:left}", --steps, "1500",
          --out, "{repo}/logs/shadow/sim_live.npz",
          --stream_udp, "47311", --stream_rate_scale, "0.25", --stream_meas, --hold_open]
       manual: true
     - note: 브리지 — 선보상 오프셋은 좌팔 캘리브 문서 §4 의 실측값
       argv:
-        [python3, "{repo}/scripts/isaacsim_cmd_to_jtc.py", --robot, gripper_left,
+        [python3, "{repo}/scripts/nodes/isaacsim_cmd_to_jtc.py", --robot, gripper_left,
          --max-vel, "1.0",
          --arm-offset, " -0.0666,-0.0298,-0.0101,+0.0549,+0.0174,-0.0001,-0.0732"]
       background: true
     - note: UDP → ROS 어댑터
       argv:
-        [python3, "{repo}/scripts/udp_cmd_to_ros.py", --port, "47311",
+        [python3, "{repo}/scripts/nodes/udp_cmd_to_ros.py", --port, "47311",
          --log, "{repo}/logs/shadow/live_adapter.csv"]
       execute_args: [--execute]
       background: true

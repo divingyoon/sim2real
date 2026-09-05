@@ -6,7 +6,7 @@
 ## §0 최종 결론
 
 > 자동화·인수인계는 **`docs/R2S_FRAMEWORK.md`** 를 볼 것.
-> 한 명령: `python3 scripts/r2s_pipeline.py --stage all`
+> 한 명령: `python3 scripts/analysis/r2s_pipeline.py --stage all`
 
 ### 측정된 사실
 
@@ -349,7 +349,7 @@ j4 가 실기 1.00 인데 armature 2.726 을 넣자 sim 이 1.50 이 됐다. `ω
 성립하지 않는다. 여진은 자유공간의 작은 진동이므로 **관절별 선형 2차계**로 충분히
 서고, 그 fit 은 초 단위다.
 
-`scripts/fit_excite_model.py` — 모델 `J q̈ + kd q̇ + kp q = kp q_des`:
+`scripts/analysis/fit_excite_model.py` — 모델 `J q̈ + kd q̇ + kp q = kp q_des`:
 
 | 관절 | ωn [Hz] | ζ | 지연 [ms] | fit RMSE | **holdout RMSE** |
 |---|---|---|---|---|---|

@@ -1,0 +1,17 @@
+# head 카메라 extrinsics v2 — head_v1 CAD 사전 모델 hand-eye 재계산 (2026-09-05, 후보, 미적용)
+#   T_base_cam(pan,tilt) = T_base_neck(pan_enc→URDF, tilt_enc→URDF) ∘ T_neck_cam  (FK: scripts/head_fk_chain.py, head_v1 URDF)
+#   T_neck_cam = Rot_y(tilt_off) ∘ T_cad, tilt_off = +90.5145° (tilt 인코더 영점: CAD 관절각 = 인코더 + 90.51°)
+#   T_cad: RGB 렌즈 = head_v1 camera_link 의 y=+0.0326 개구부(CAD 라벨 ir_projector_frame) — color_frame(y −0.0115) 가정은 RMS 5.9 px,
+#          이 개구부 가정은 RMS 1.86 px · 보드 z 0.2037(줄자 0.205) · 홈 실사진 기둥 볼트 랜드마크 3~8 px 안. 자세: ROS optical(+Z 전방).
+#   pan 영점은 보드 영상으로 관측 불가(게이지) → 홈 실사진 랜드마크로 0 으로 둠(잔차 3~6 px).
+#   근거: scripts/calib/solve_head_cad_prior.py · our_source/head_check_0905/
+neck_to_camera:
+  matrix:
+    - [+0.000000000, -0.999959683, -0.008979598, +0.036204548]
+    - [-1.000000000, +0.000000000, +0.000000000, +0.044096000]
+    - [+0.000000000, +0.008979598, -0.999959683, -0.012685614]
+    - [+0.000000000, +0.000000000, +0.000000000, +1.000000000]
+tilt_encoder_offset_deg: 90.5145
+pan_encoder_offset_deg: 0.0
+rgb_lens_in_camera_link: [0.03486, 0.03255, 0.10232]  # head_v1 CAD aperture used as the RGB optical origin
+table_top_z_from_hand_eye: 0.2037

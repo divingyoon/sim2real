@@ -1,7 +1,7 @@
 > ⚠️ **DEPRECATED — 구 v7 계약(obs 106D / action 11D)**
 >
 > 현행 `grasp_v1` 계약은 **obs 154D / action 21D**, 진입점은
-> `scripts/grasp_inference.py --robot <구성 프로필>` 이다.
+> `scripts/nodes/grasp_inference.py --robot <구성 프로필>` 이다.
 > 계약 요약은 `docs/CONTRACT_grasp_v1_{right,left}.md`, 실행 절차는
 > `docs/RUNBOOK_GRASP_V1_LIVE.md` 를 보라. 이 문서는 이력 보존용이다.
 
@@ -15,8 +15,8 @@
 
 | 파일 | 역할 |
 |------|------|
-| `scripts/sim2real_inference.py` | ROS2 추론 노드 (실물 하드웨어용) |
-| `scripts/sim2real_dryrun.py` | ROS2 시각화 노드 (하드웨어 없이 RViz 확인용) |
+| `scripts/deprecated/sim2real_inference.py` | ROS2 추론 노드 (실물 하드웨어용) |
+| `scripts/deprecated/sim2real_dryrun.py` | ROS2 시각화 노드 (하드웨어 없이 RViz 확인용) |
 | `scripts/policy_loader.py` | rl_games actor MLP 로더 (Isaac Sim 의존성 없음) |
 | `scripts/fabrics_ros_interface.py` | ROS2 명령 퍼블리셔 (`Sim2RealCommandPublisher`) |
 
@@ -212,7 +212,7 @@ ros2 launch openarm_control openarm_left_gripper_bimanual_real.launch.py use_fak
 ros2 launch isaacsim_bridge isaacsim_bridge.launch.py
 
 # 터미널 3: dry-run 노드
-python3 /home/user/rl_ws/sim2real/scripts/sim2real_dryrun.py \
+python3 /home/user/rl_ws/sim2real/scripts/deprecated/sim2real_dryrun.py \
     --agent  $AGENT \
     --ckpt   $CKPT \
     --cup_x 0.40 --cup_y -0.15 --cup_z 0.38
@@ -236,7 +236,7 @@ ros2 launch integrated_control openarm_left_gripper_right_dg5_real.launch.py
 ros2 launch isaacsim_bridge isaacsim_bridge.launch.py
 
 # 터미널 3: 추론 노드
-python3 /home/user/rl_ws/sim2real/scripts/sim2real_inference.py \
+python3 /home/user/rl_ws/sim2real/scripts/deprecated/sim2real_inference.py \
     --agent  $AGENT \
     --ckpt   $CKPT \
     --settle_time 4.0

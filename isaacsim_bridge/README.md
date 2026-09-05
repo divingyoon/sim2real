@@ -42,8 +42,8 @@ RH56F1 세팅에서는 `bridge_node`를 `right_hand_enabled:=false`(Tesollo 경�
 
 - `../scripts/fabrics_ros_interface.py`
 - `../scripts/file_command_transport.py`
-- `../scripts/file_command_relay.py`
-- `../scripts/manual_command_pub.py`
+- `../scripts/nodes/file_command_relay.py`
+- `../scripts/nodes/manual_command_pub.py`
 
 ## 브리지 입력 토픽
 
@@ -140,7 +140,7 @@ FABRICS Python 루프에서 `../scripts/fabrics_ros_interface.py` 를 import 해
    - `../scripts/file_command_transport.py` 사용
    - 기본 파일: `/tmp/sim2real_cmd.json`
 2. ROS 2 프로세스
-   - `../scripts/file_command_relay.py` 실행
+   - `../scripts/nodes/file_command_relay.py` 실행
    - 파일 내용을 읽어 `/isaacsim/*` 토픽으로 재발행
 
 중계기 실행:
@@ -149,7 +149,7 @@ FABRICS Python 루프에서 `../scripts/fabrics_ros_interface.py` 를 import 해
 source /opt/ros/humble/setup.bash
 REPO_DIR="/path/to/sim2real_control"
 source "${REPO_DIR}/install/setup.bash"
-python3 "${REPO_DIR}/scripts/file_command_relay.py"
+python3 "${REPO_DIR}/scripts/nodes/file_command_relay.py"
 ```
 
 기본 공유 파일:
@@ -164,7 +164,7 @@ FABRICS 없이 토픽만 빠르게 테스트할 때:
 source /opt/ros/humble/setup.bash
 REPO_DIR="/path/to/sim2real_control"
 source "${REPO_DIR}/install/setup.bash"
-python3 "${REPO_DIR}/scripts/manual_command_pub.py" left-arm 0 0 0 0 0 0 0
+python3 "${REPO_DIR}/scripts/nodes/manual_command_pub.py" left-arm 0 0 0 0 0 0 0
 ```
 
 예시:
@@ -172,19 +172,19 @@ python3 "${REPO_DIR}/scripts/manual_command_pub.py" left-arm 0 0 0 0 0 0 0
 - 왼팔만:
 
 ```bash
-python3 "${REPO_DIR}/scripts/manual_command_pub.py" left-arm 0 0 0 0 0 0 0
+python3 "${REPO_DIR}/scripts/nodes/manual_command_pub.py" left-arm 0 0 0 0 0 0 0
 ```
 
 - 왼쪽 그리퍼:
 
 ```bash
-python3 "${REPO_DIR}/scripts/manual_command_pub.py" left-gripper 0.015
+python3 "${REPO_DIR}/scripts/nodes/manual_command_pub.py" left-gripper 0.015
 ```
 
 - 오른팔만:
 
 ```bash
-python3 "${REPO_DIR}/scripts/manual_command_pub.py" right-arm 0 0 0 0 0 0 0
+python3 "${REPO_DIR}/scripts/nodes/manual_command_pub.py" right-arm 0 0 0 0 0 0 0
 ```
 
 ## 브리지 실행

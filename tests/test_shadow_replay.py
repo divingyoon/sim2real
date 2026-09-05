@@ -1,0 +1,242 @@
+"""재생기가 실기에 무엇을 내보내는가 — ROS 없이 검증한다.
+
+노드 자체는 rclpy 를 필요로 하지만, **무엇을 보낼지 정하는 부분**은 순수 코드다:
+프로필에서 계약을 읽고, 기록과 맞는지 확인하고, canonical→source 로 리맵한다.
+그 세 곳이 이 태스크의 알려진 함정과 정확히 겹친다.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+_HERE = Path(__file__).resolve().parents[1] / "scripts"
+sys.path.insert(0, str(_HERE))
+
+from jtc_bridge_core import JointRemap  # noqa: E402
+from robot_profile import load_robot_profile  # noqa: E402
+from shadow_replay import ABORT_TRACKING_ERR_RAD, build_plan, describe  # noqa: E402
+
+PROFILE = "gripper_left"
+
+
+@pytest.fixture(scope="module")
+def profile():
+    return load_robot_profile(PROFILE)
+
+
+def _npz(tmp_path, *, joints=None, grip=("l_hj_gripper_1", "l_hj_gripper_2"), frames=20):
+    joints = joints or [f"l_aj_{i}" for i in range(1, 8)]
+    path = tmp_path / "sim.npz"
+    np.savez_compressed(
+        path,
+        arm_target=np.zeros((frames, 1, len(joints)), dtype=np.float32),
+        grip_cmd=np.tile(np.array([0.02, 0.02], dtype=np.float32), (frames, 1, 1))[:, :, : len(grip)],
+        meta_joint_names=np.array(joints),
+        meta_grip_names=np.array(list(grip)),
+        meta_step_dt=np.array([1 / 60]),
+    )
+    return path
+
+
+def test_the_plan_takes_the_jaw_the_profile_names(tmp_path, profile):
+    """sim 은 두 조를 다 지령하지만 실기 URDF 는 mimic 이 살아 있어 한 조면 따라온다."""
+    plan = build_plan(_npz(tmp_path), rate_scale=1.0, profile=profile)
+
+    assert plan.gripper_name == "l_hj_gripper_1"
+    assert plan.grip_target.shape == (20,)
+
+
+def test_a_recording_whose_joint_order_differs_is_refused(tmp_path, profile):
+    """순서가 다른데 그냥 흘려보내면 관절이 뒤바뀐 채로 로봇이 움직인다."""
+    shuffled = [f"l_aj_{i}" for i in (2, 1, 3, 4, 5, 6, 7)]
+
+    with pytest.raises(SystemExit, match="팔 관절 순서"):
+        build_plan(_npz(tmp_path, joints=shuffled), rate_scale=1.0, profile=profile)
+
+
+def test_a_recording_without_the_profiles_jaw_is_refused(tmp_path, profile):
+    with pytest.raises(SystemExit, match="그리퍼"):
+        build_plan(_npz(tmp_path, grip=("l_hj_other",)), rate_scale=1.0, profile=profile)
+
+
+def test_the_plan_warns_when_it_demands_more_than_the_profile_allows(tmp_path, profile):
+    """재생 전에 알아야 한다 — 실기 한계를 넘는 요구는 브리지가 조용히 깎는다."""
+    path = tmp_path / "fast.npz"
+    joints = [f"l_aj_{i}" for i in range(1, 8)]
+    target = np.zeros((10, 1, 7), dtype=np.float32)
+    target[:, 0, 0] = np.linspace(0.0, 3.0, 10)          # 60 Hz 로 18 rad/s
+    np.savez_compressed(
+        path, arm_target=target,
+        grip_cmd=np.zeros((10, 1, 2), dtype=np.float32),
+        meta_joint_names=np.array(joints),
+        meta_grip_names=np.array(["l_hj_gripper_1", "l_hj_gripper_2"]),
+        meta_step_dt=np.array([1 / 60]),
+    )
+    plan = build_plan(path, rate_scale=1.0, profile=profile)
+
+    text = describe(plan, profile)
+
+    assert "요구가 한계를 넘는다" in text
+    assert "--rate-scale" in text
+
+
+def test_slowing_the_replay_brings_the_demand_under_the_limit(tmp_path, profile):
+    path = tmp_path / "fast.npz"
+    joints = [f"l_aj_{i}" for i in range(1, 8)]
+    target = np.zeros((10, 1, 7), dtype=np.float32)
+    target[:, 0, 0] = np.linspace(0.0, 3.0, 10)
+    np.savez_compressed(
+        path, arm_target=target,
+        grip_cmd=np.zeros((10, 1, 2), dtype=np.float32),
+        meta_joint_names=np.array(joints),
+        meta_grip_names=np.array(["l_hj_gripper_1", "l_hj_gripper_2"]),
+        meta_step_dt=np.array([1 / 60]),
+    )
+
+    assert "요구가 한계를 넘는다" not in describe(
+        build_plan(path, rate_scale=0.05, profile=profile), profile)
+
+
+def test_the_arm_remap_is_identity_for_this_profile(profile):
+    """좌팔은 sign 이 전부 +1 이고 순서도 같다 — 그래도 매핑을 통과시켜 확인한다."""
+    remap = JointRemap(list(profile.arm_canonical), list(profile.arm_source),
+                       profile.joint_limits)
+    values = np.array([0.0, -0.3, 0.0, 0.9, -0.4, 0.0, -0.3])
+
+    assert remap.apply(values) == pytest.approx(values)
+
+
+def test_the_gripper_remap_clamps_to_the_real_stroke(profile):
+    remap = JointRemap(["l_hj_gripper_1"], list(profile.ee_source), profile.joint_limits)
+
+    assert remap.apply(np.array([0.10]))[0] == pytest.approx(0.044)
+    assert remap.apply(np.array([-0.01]))[0] == pytest.approx(0.0)
+
+
+def test_without_execute_the_replayer_publishes_nothing(tmp_path, profile):
+    """robotctl 과 같은 규약 — `--execute` 가 없으면 wire 에 아무것도 올리지 않는다.
+
+    rclpy import 자체가 `--execute` 뒤에 있으므로, ROS 없는 환경에서 dry-run 이 도는지가
+    그 구조의 증거다.
+    """
+    result = subprocess.run(
+        [sys.executable, str(_HERE / "nodes/shadow_replay.py"), "--sim", str(_npz(tmp_path)),
+         "--robot", PROFILE, "--rate-scale", "0.25"],
+        capture_output=True, text=True, timeout=120,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "DRY RUN" in result.stdout
+    assert "발행" in result.stdout
+
+
+def test_the_abort_threshold_is_tighter_than_the_droop_we_predict():
+    """중단 문턱이 예측 처짐보다 낮으면 정상 동작에서 매번 멈춘다.
+
+    §6-2 좌팔 예측: 펌웨어 게인에서 최악 관절 정착 오차 69.5 mrad. 중단은 그보다
+    넉넉히 위(300 mrad)에 두되, 관절 한계를 향해 달려가는 실패는 잡아야 한다.
+    """
+    predicted_droop_rad = 0.0695
+
+    assert ABORT_TRACKING_ERR_RAD > predicted_droop_rad * 3
+    assert ABORT_TRACKING_ERR_RAD < 0.5
+
+
+def test_the_idle_arm_pose_the_world_model_assumes_is_available(profile):
+    """fabric world 는 유휴 우팔을 **고정 위치의 구**로 세워 둔다.
+
+    `open_gripper_left_boxes_no_table.yaml` 의 `right_arm_body` 가 (0.25, −0.20, 0.55)
+    반경 0.15 다. sim 은 유휴 팔을 `RIGHT_ARM_REST_JOINT_POS` 로 고정한 채 학습하므로 그
+    구가 팔을 대표한다. 실기 우팔이 다른 곳에 있으면 두 가지가 동시에 틀린다 —
+    fabric 이 **없는 장애물**을 피하고, **있는 팔**은 피하지 않는다.
+
+    그래서 재생기는 시작 전에 유휴 팔 자세를 확인할 수 있어야 한다. 확인할 값이 있는지가
+    먼저다(`grasp_inference` 는 같은 이유로 `IDLE_ARM_MISMATCH_RAD` 게이트를 둔다).
+    """
+    from robot_profile import idle_arm_rest_pose
+
+    rest = idle_arm_rest_pose(profile)
+
+    assert len(rest) == len(profile.idle_arm_canonical) == 7
+    assert all(np.isfinite(rest))
+
+
+def test_the_replayer_refuses_to_start_when_the_idle_arm_is_out_of_place():
+    """확인만 하고 넘어가면 확인이 아니다 — 어긋나면 거부해야 한다."""
+    from shadow_replay import IDLE_ARM_MISMATCH_RAD, idle_arm_offenders
+
+    rest = np.array([0.0, 0.3, 0.0, 2.0, 0.0, 0.0, 0.0])
+    names = [f"r_aj_{i}" for i in range(1, 8)]
+
+    assert idle_arm_offenders(rest, rest, names, IDLE_ARM_MISMATCH_RAD) == []
+
+    moved = rest.copy()
+    moved[3] += IDLE_ARM_MISMATCH_RAD * 2
+    offenders = idle_arm_offenders(moved, rest, names, IDLE_ARM_MISMATCH_RAD)
+
+    assert [name for name, _, _ in offenders] == ["r_aj_4"], offenders
+
+
+def test_a_small_idle_arm_deviation_is_tolerated():
+    """실기 팔은 중력으로 처진다 — 처짐까지 거부하면 아무 때도 시작 못 한다."""
+    from shadow_replay import IDLE_ARM_MISMATCH_RAD, idle_arm_offenders
+
+    rest = np.zeros(7)
+    drooped = rest.copy()
+    drooped[1] = IDLE_ARM_MISMATCH_RAD * 0.5
+
+    assert idle_arm_offenders(drooped, rest, [f"r_aj_{i}" for i in range(1, 8)],
+                              IDLE_ARM_MISMATCH_RAD) == []
+
+
+def test_the_abort_asks_whether_the_arm_followed_what_we_sent(tmp_path, profile):
+    """중단은 **보낸 것** 대비로 판정해야 한다.
+
+    두 뒤처짐이 겹친다:
+      ① 세트포인트가 기록 target 을 못 따라감 — **우리 리미터**(`--max-vel`)가 붙잡은 것
+      ② 실측이 세트포인트를 못 따라감       — **팔**이 못 따라간 것
+    ①은 계획 문제이고 ②는 안전 문제다. 뭉뚱그려 재면 리미터를 낮게 잡았다는 이유로
+    멀쩡한 팔에서 중단이 걸린다(08.25 에 실제로 그렇게 걸렸다 — l_aj_2 에서 ① 0.092 +
+    ② 0.118 이 합쳐져 0.21 로 읽혔다).
+    """
+    from shadow_replay import tracking_offenders
+
+    names = ["l_aj_1", "l_aj_2"]
+    setpoint = np.array([0.0, -0.30])
+    measured = np.array([0.0, -0.29])          # 보낸 것은 잘 따라가는 중
+    target = np.array([0.0, -0.50])            # 기록은 훨씬 앞서 있다(리미터가 붙잡음)
+
+    assert tracking_offenders(measured, setpoint, names, 0.30) == []
+
+    stalled = np.array([0.0, 0.0])             # 보낸 것도 못 따라감
+    offenders = tracking_offenders(stalled, setpoint, names, 0.20)
+
+    assert [n for n, _ in offenders] == ["l_aj_2"], offenders
+
+
+def test_the_plan_checks_the_setpoint_cap_against_its_own_demand(tmp_path, profile):
+    """리미터가 요구보다 낮으면 세트포인트가 구조적으로 뒤처진다 — 발행 전에 알아야 한다."""
+    from shadow_replay import describe
+
+    path = tmp_path / "demand.npz"
+    joints = [f"l_aj_{i}" for i in range(1, 8)]
+    target = np.zeros((10, 1, 7), dtype=np.float32)
+    target[:, 0, 1] = np.linspace(0.0, 0.5, 10)          # 60 Hz 로 3.0 rad/s
+    np.savez_compressed(
+        path, arm_target=target, grip_cmd=np.zeros((10, 1, 2), dtype=np.float32),
+        meta_joint_names=np.array(joints),
+        meta_grip_names=np.array(["l_hj_gripper_1", "l_hj_gripper_2"]),
+        meta_step_dt=np.array([1 / 60]),
+    )
+    plan = build_plan(path, rate_scale=0.25, profile=profile)   # 요구 0.75 rad/s
+
+    tight = describe(plan, profile, max_vel=0.5)
+    loose = describe(plan, profile, max_vel=2.0)
+
+    assert "세트포인트 상한" in tight and "뒤처진다" in tight
+    assert "뒤처진다" not in loose

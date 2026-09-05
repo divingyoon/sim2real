@@ -232,7 +232,7 @@ ros2 launch openarm_bringup openarm.bimanual.launch.py use_fake_hardware:=true
 ros2 run isaacsim_bridge bridge_node
 
 # 터미널 3: dry-run 노드 (하드웨어 대신 RViz로 확인)
-python3 sim2real/scripts/sim2real_dryrun.py
+python3 sim2real/scripts/deprecated/sim2real_dryrun.py
 ```
 
 로봇별 정책·체크포인트를 바꿔가며 이 골격을 재사용한다.
