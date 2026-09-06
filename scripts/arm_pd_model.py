@@ -91,7 +91,8 @@ class MockArm:
     """
 
     def __init__(self, q0, model: str, max_vel: float, dt: float,
-                 kp=None, kd=None, fc=None, inertia=None, substeps: int = 32) -> None:
+                 kp=None, kd=None, fc=None, inertia=None, substeps: int = 32,
+                 gravity=None) -> None:
         if model not in ("rate", "pd"):
             raise ValueError(f"arm model 은 rate|pd — 받은 값 {model!r}")
         if model == "pd" and any(v is None for v in (kp, kd, fc, inertia)):
@@ -143,27 +144,48 @@ class MockArm:
         self.sub_dt = self.dt / self.substeps
         self.kp, self.kd, self.fc = kp, kd, fc
         self.I = inertia
+        #: g(q) → 관절 중력토크(N·m). None 이면 무중력(기존 동작). policy_control 의
+        #: fake 플랜트가 robot_control.kinematics 로 넣는다.
+        self.gravity = gravity
+        #: 마지막 tick 의 모터 토크(스프링+감쇠+τ_ff, 마찰 제외). /joint_states effort 로 나간다.
+        self.tau = np.zeros_like(self.q)
 
-    def step(self, cmd) -> None:
-        """제어 1 tick 진행. 세트포인트는 브리지 rate-limit 을 거친다."""
+    def step(self, cmd, qd_cmd=None, tau_ff=None) -> None:
+        """제어 1 tick 진행. 세트포인트는 브리지 rate-limit 을 거친다.
+
+        MIT 3중 지령: τ = kp(sp−q) + kd(q̇*−q̇) + τ_ff − g(q) − Fc·sgn(q̇).
+        `qd_cmd`/`tau_ff` 를 생략하면 옛 호출(q̇*=0, τ_ff=0)과 같다. `rate` 모델은 둘을 무시한다.
+        """
         cmd = np.asarray(cmd, dtype=np.float64)
+        qd_star = self._vector(qd_cmd, "qd_cmd")
+        tau_ff_v = self._vector(tau_ff, "tau_ff")
         sp = self.q + np.clip(cmd - self.q, -self.max_step, self.max_step)
         if self.model == "rate":
             self.qd = (sp - self.q) / self.dt
             self.q = sp
             return
         for _ in range(self.substeps):
-            self._pd_substep(sp)
+            self._pd_substep(sp, qd_star, tau_ff_v)
 
-    def _pd_substep(self, sp) -> None:
+    def _vector(self, value, name: str) -> np.ndarray:
+        if value is None:
+            return np.zeros_like(self.q)
+        arr = np.asarray(value, dtype=np.float64).reshape(-1)
+        if arr.shape != self.q.shape:
+            raise ValueError(f"{name} 길이 {arr.shape[0]} != 관절 수 {self.q.shape[0]}")
+        return arr
+
+    def _pd_substep(self, sp, qd_star, tau_ff) -> None:
         # ★감쇠는 **암시적**으로 푼다. 명시적으로 적분하면 kd/I·dt > 2 인 저관성 관절
         #   (손목·전완 roll)에서 발산한다 — 실측 게인·관성으로 실제 NaN 이 났다.
-        #     qd⁺ = (qd + (kp(sp−q)/I)·dt) / (1 + (kd/I)·dt)   ← 무조건 안정
+        #     qd⁺ = (qd + (kp(sp−q) + kd·q̇* + τ_ff − g(q))/I·dt) / (1 + (kd/I)·dt)   ← 무조건 안정
         dt = self.sub_dt
-        accel_spring = self.kp * (sp - self.q) / self.I
-        qd_free = (self.qd + accel_spring * dt) / (1.0 + (self.kd / self.I) * dt)
+        g = np.zeros_like(self.q) if self.gravity is None else np.asarray(self.gravity(self.q), dtype=np.float64)
+        drive = self.kp * (sp - self.q) + self.kd * qd_star + tau_ff - g
+        qd_free = (self.qd + drive / self.I * dt) / (1.0 + (self.kd / self.I) * dt)
         # 쿨롱 마찰은 운동을 **막을 뿐 역전시키지 못한다**. `-Fc·sign(qd)` 를 그대로 적분하면
         # 속도가 0 을 지날 때 부호가 튀며 에너지를 주입한다 → 속도 변화량을 |qd_free| 로 상한.
         dv_fric = np.minimum(self.fc / self.I * dt, np.abs(qd_free))
         self.qd = qd_free - np.sign(qd_free) * dv_fric
         self.q = self.q + self.qd * dt
+        self.tau = self.kp * (sp - self.q) + self.kd * (qd_star - self.qd) + tau_ff

@@ -1,0 +1,57 @@
+# 좌팔 + 스톡 2지 그리퍼 — 실기 (플랜 §4.3)
+# 리더 타입은 3종뿐: joint_state | float_array | pose. 값은 전부 여기(또는 계약)에서 온다.
+robot: gripper_left
+# canonical↔source 이름·부호·한계의 출처 (rl_ws 기준 상대 경로 또는 절대 경로)
+joint_profile: robot_control/src/robot_control/profiles/openarm_tesollo.yaml
+sources:
+  arm:
+    type: joint_state
+    topic: /joint_states                 # joint_state_broadcaster (source 이름)
+    joints: [l_aj_1, l_aj_2, l_aj_3, l_aj_4, l_aj_5, l_aj_6, l_aj_7]
+    naming: source
+    stale_sec: 0.5
+  ee:
+    type: joint_state
+    topic: /joint_states                 # 그리퍼는 팔과 같은 CAN 인터페이스의 8번째 관절
+    joints: [l_hj_gripper_1]
+    mirror: {l_hj_gripper_2: l_hj_gripper_1}   # 실기 URDF 는 mimic — 두 번째 턱은 복제
+    velocity: zero                       # 드라이버가 그리퍼 velocity 를 0 으로 박아 둔다
+    naming: source
+    stale_sec: 0.5
+  object:
+    type: pose
+    topic: /objects/cup_big_s100/pose    # object_pose_node (FP++), base_link 프레임
+    frame: base_link
+    mode: attach_after_gate              # latch_at_reset | attach_after_gate | live (09.03 실증)
+    stale_sec: 0.5
+  decoder_target:
+    type: joint_state
+    topic: /policy_control/joint_target  # fabric 노드의 직전 손 목표 (canonical 이름)
+    joints: [l_hj_gripper_1]
+    naming: canonical
+    required: false
+    stale_sec: 1.0
+  head:
+    type: joint_state
+    topic: /head/joint_states            # Dynamixel, 읽기 전용, 20 Hz
+    joints: [head_j_pan, head_j_tilt]
+    naming: canonical
+    required: false
+    stale_sec: 1.0
+groups:                                  # pd 백엔드 (M5/M7 소비)
+  left_arm:
+    backend: arm_forward
+    side: left
+    jtc: left_joint_trajectory_controller
+    forward: [left_forward_position_controller, left_forward_velocity_controller, left_forward_effort_controller]
+  left_gripper:
+    backend: jtc_single_point
+    topic: /left_gripper_controller/joint_trajectory
+    joint: openarm_left_finger_joint1
+    close_overtravel_m: 0.008
+table:
+  top: 0.205                             # 플레이트 상면 + 0.205 (09.05 env_v1 CAD 정정)
+  clearance_min: 0.03
+  # 판 xy 범위 — live 노드 TABLE 상수(cx 0.375, cy -0.165, sx 0.550, sy 0.970). 밖에서는 여유 검사 면제
+  center_xy: [0.375, -0.165]
+  size_xy: [0.550, 0.970]

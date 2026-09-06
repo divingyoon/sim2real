@@ -19,6 +19,8 @@ def main() -> None:
     ap.add_argument("--frame", default="base_link")
     ap.add_argument("--rate", type=float, default=30.0)
     ap.add_argument("--orbit", default="", help="r,hz (예: 0.05,0.2). 빈값=정지")
+    ap.add_argument("--topic", default="/cup_pose",
+                    help="발행 토픽. policy_control 은 /objects/<name>/pose 를 구독한다")
     args = ap.parse_args()
     r = hz = 0.0
     if args.orbit:
@@ -26,7 +28,7 @@ def main() -> None:
 
     rclpy.init()
     node = Node("fake_cup_pose_pub")
-    pub = node.create_publisher(PoseStamped, "/cup_pose", 10)
+    pub = node.create_publisher(PoseStamped, args.topic, 10)
     t0 = node.get_clock().now()
 
     def tick():

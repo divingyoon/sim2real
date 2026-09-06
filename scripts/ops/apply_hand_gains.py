@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 """손 JTC PID 게인을 **한 번의 서비스 호출**로 적용한다 (bringup 이후 매번).
 
-09.01 확정값 `p=4.5 · i=0 · d=0`. 근거는 `docs/R2S_FRAMEWORK.md` §손:
+★★2026-09-06 사용자 확정: 학습·제어 전부 **벤더 기준 PD 게인만** 쓴다.
+   DG-5F 손의 벤더값은 `p=1.5 · i=0 · d=0`(dg5f_driver PID yaml, 40 관절 동일)이고
+   그것이 이 스크립트의 기본값이다. 드라이버가 이미 그 값으로 뜨므로 평소에는
+   **적용할 것이 없다** — 이 도구는 이제 "드라이버가 벤더값인지 확인·복원"이 주 용도다.
 
-  · 벤더 기본 `p=1.5` 는 4 s 램프 주먹에서도 지령의 82 % 밖에 못 간다.
-  · **p=6 부터 진동**이 시작된다(다관절 σ 0.099 → 0.160°, p=12 는 육안 확인).
-  · `p=4.5` 는 완전 주먹에서 σ 0.095°(기저 0.09°와 같음)·도달률 98~101 %·
-    정상오차 0.39° — 진동 없이 얻을 수 있는 최선이다.
-  · `d` 는 0~0.05 에서 진동에 영향이 없고(σ 0.095~0.099°), 단일 관절에서는
-    d>0.02 가 오버슈트를 만든다 ⇒ 벤더처럼 **d=0** 을 유지한다.
+   구 09.01 튜닝값 `p=4.5`(폐기, `--p 4.5` 로만 도달 가능)의 실측 근거는 기록으로 남긴다:
+     · 벤더 기본 p=1.5 는 4 s 램프 주먹에서 지령의 82 % 까지만 간다.
+     · p=6 부터 진동(다관절 σ 0.099 → 0.160°), p=4.5 는 도달률 98~101 %·σ 0.095°.
+     · d 는 0~0.05 에서 진동 무관, 단일 관절 d>0.02 는 오버슈트 ⇒ 벤더처럼 d=0.
+   ⇒ 벤더값으로 돌아가면 **파지 도달률이 82 % 대로 떨어진다**. sim 도 같은 1.5 로
+     학습하므로 sim↔실기는 일치하지만, 파지 성능은 재확인이 필요하다.
 
 ★진동은 **다관절 동시**에만 나타난다. 관절 하나로 시험하면 σ 가 0 이라 놓친다.
 
     python3 apply_hand_gains.py            # 현재 값 확인만
-    python3 apply_hand_gains.py --execute  # p=4.5 적용
-    python3 apply_hand_gains.py --restore --execute   # 벤더 기본으로 되돌림
+    python3 apply_hand_gains.py --execute  # 벤더 p=1.5 적용(=드라이버 기본)
+    python3 apply_hand_gains.py --p 4.5 --execute   # ★구 튜닝값 — 벤더 규칙 위반
 """
 
 from __future__ import annotations
@@ -22,17 +25,20 @@ from __future__ import annotations
 import argparse
 
 CTRL = "/dg5f_right/dg5f_right_controller"
-TUNED_P, TUNED_D = 4.5, 0.0
+#: 벤더 드라이버 PID(dg5f_both_pid_all_controller.yaml, 40 관절 전부 같다) = 기본값.
 VENDOR_P, VENDOR_D = 1.5, 0.0
+#: 구 09.01 튜닝값 — 2026-09-06 벤더 전용 규칙으로 폐기. `--p 4.5` 로만 쓸 수 있다.
+RETIRED_TUNED_P, RETIRED_TUNED_D = 4.5, 0.0
+TUNED_P, TUNED_D = VENDOR_P, VENDOR_D
 JOINTS = [f"rj_dg_{f}_{j}" for f in range(1, 6) for j in range(1, 5)]
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--p", type=float, default=None, help="기본 4.5")
+    parser.add_argument("--p", type=float, default=None, help="기본 1.5(벤더). 4.5 는 폐기된 튜닝값")
     parser.add_argument("--d", type=float, default=None, help="기본 0.0")
-    parser.add_argument("--restore", action="store_true", help="벤더 기본(1.5/0)")
+    parser.add_argument("--restore", action="store_true", help="벤더 기본(1.5/0) — 이제 기본값과 같다")
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
 

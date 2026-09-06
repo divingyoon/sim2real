@@ -1,0 +1,494 @@
+{
+ "schema": "policy_control/deploy_contract/v2",
+ "run": {
+  "dir": "logs/policy/left_v2B25",
+  "task": "open-grip_l_grasp_sensor_v2",
+  "experiment": "v2B25_tip30_fresh",
+  "checkpoint": "nn/v2B25_tip30_ep2150.pth",
+  "checkpoint_md5": "272194299637fef6aa89c8e93161d1b6",
+  "env_yaml_sha1": "61efbe90ba8a0dc9cfece644c3e1830bd7af34ed",
+  "agent_yaml_sha1": "798e9f2501e70f9560dd9af9c6fb5e4e0ed6b40e"
+ },
+ "rate": {
+  "policy_hz": 50.0,
+  "step_dt": 0.02,
+  "episode_steps": 250
+ },
+ "policy": {
+  "obs_dim": 49,
+  "action_dim": 7,
+  "rnn": null,
+  "mlp_units": [
+   256,
+   128,
+   64
+  ],
+  "normalize_input": true,
+  "action_clip": 100.0,
+  "obs_clip": 100.0
+ },
+ "obs": {
+  "joint_orders": {
+   "arm": [
+    "l_aj_1",
+    "l_aj_2",
+    "l_aj_3",
+    "l_aj_4",
+    "l_aj_5",
+    "l_aj_6",
+    "l_aj_7"
+   ],
+   "ee": [
+    "l_hj_gripper_1",
+    "l_hj_gripper_2"
+   ]
+  },
+  "fk": {
+   "kind": "left_gripper",
+   "urdf": "urdf/generated/rl/openarm_tesollo_sensor_rl.urdf"
+  },
+  "segments": [
+   {
+    "name": "joint_pos",
+    "dim": 9,
+    "builder": "joint_pos_rel",
+    "params": {
+     "default": [
+      -0.0136,
+      -0.3255,
+      -0.001,
+      0.5665,
+      -0.4655,
+      0.0088,
+      -0.8304,
+      0.044,
+      0.044
+     ]
+    }
+   },
+   {
+    "name": "joint_vel",
+    "dim": 9,
+    "builder": "joint_vel_rel",
+    "params": {
+     "default": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+     ]
+    }
+   },
+   {
+    "name": "object_position",
+    "dim": 3,
+    "builder": "object_pos_root",
+    "params": {}
+   },
+   {
+    "name": "target_object_position",
+    "dim": 7,
+    "builder": "goal_pose",
+    "params": {
+     "goal": [
+      0.375,
+      0.244,
+      0.447,
+      1.0,
+      0.0,
+      0.0,
+      0.0
+     ]
+    }
+   },
+   {
+    "name": "actions",
+    "dim": 7,
+    "builder": "last_action",
+    "params": {}
+   },
+   {
+    "name": "gripper_gate",
+    "dim": 1,
+    "builder": "gripper_gate",
+    "params": {
+     "band_axis": [
+      -0.08209000000000001,
+      -0.007089999999999999
+     ],
+     "band_source": "grasp_left_preset.GRASP_HEIGHT_BAND (v1)",
+     "pad_offset": 0.0319,
+     "lateral_ok": 0.03,
+     "along_ok": 0.03,
+     "release_lateral": 0.06
+    }
+   },
+   {
+    "name": "tcp_pos",
+    "dim": 3,
+    "builder": "tcp_pos_normalized",
+    "params": {
+     "palm_box": [
+      [
+       0.22,
+       0.6
+      ],
+      [
+       0.1,
+       0.43
+      ],
+      [
+       0.16,
+       0.6
+      ]
+     ]
+    }
+   },
+   {
+    "name": "palm_rot",
+    "dim": 6,
+    "builder": "rot6d_rows",
+    "params": {
+     "body": "l_hl_gripper_base"
+    }
+   },
+   {
+    "name": "goal_minus_cup",
+    "dim": 3,
+    "builder": "goal_minus_object",
+    "params": {}
+   },
+   {
+    "name": "cup_upright",
+    "dim": 1,
+    "builder": "object_upright",
+    "params": {}
+   }
+  ]
+ },
+ "action": {
+  "groups": [
+   {
+    "name": "palm",
+    "slice": [
+     0,
+     6
+    ]
+   },
+   {
+    "name": "gripper",
+    "slice": [
+     6,
+     7
+    ]
+   }
+  ],
+  "palm": {
+   "convention": "absolute_palm",
+   "box_lo": [
+    0.22,
+    0.1,
+    0.16
+   ],
+   "box_hi": [
+    0.6,
+    0.43,
+    0.6
+   ],
+   "pos_rate_limit": 0.02,
+   "euler_center": [
+    0.317093862,
+    -1.4835298641951802,
+    3.094591725
+   ],
+   "max_pose_angle": 1.0471975511965976,
+   "rot_rate_limit": 0.05,
+   "delta_xyz": null,
+   "delta_rot_deg": null,
+   "anchor": null,
+   "rot_center_deg": null,
+   "rot_half_deg": null,
+   "home_palm": null,
+   "rot_rate_limit_deg": null
+  },
+  "hand": {
+   "decoder": "binary_gripper",
+   "joints": [
+    "l_hj_gripper_1"
+   ],
+   "params": {
+    "open": 0.044,
+    "close": 0.0,
+    "close_when": "a<0",
+    "force_open_when_gate_closed": true
+   }
+  }
+ },
+ "fabric": {
+  "class_name": "OpenArmGripperLeftPoseFabric",
+  "robot_dir": "openarm_tesollo_sensor_left_gripper",
+  "params": "openarm_gripper_left_pose_params.yaml",
+  "world": {
+   "filename": "open_gripper_left_boxes_no_table"
+  },
+  "dt": 0.02,
+  "decimation": 2,
+  "damping": 10.0,
+  "max_objects": 8,
+  "joint_order": [
+   "l_aj_1",
+   "l_aj_2",
+   "l_aj_3",
+   "l_aj_4",
+   "l_aj_5",
+   "l_aj_6",
+   "l_aj_7"
+  ],
+  "home_q": [
+   -0.0136,
+   -0.3757,
+   -0.001,
+   0.9336,
+   -0.4655,
+   0.0003,
+   -0.3306
+  ],
+  "vel_ff_scale": 1.0,
+  "hand_vel_ff_scale": null,
+  "hand_sync": null,
+  "table_z": null,
+  "use_hand_repulsion": false,
+  "use_body_repulsion_pairs": false,
+  "home_source": "grasp_left_preset.LEFT_ARM_HOME_JOINT_POS (fabric default_config; robot reset = dump init_state)"
+ },
+ "pd": {
+  "groups": [
+   "left_arm",
+   "left_gripper"
+  ],
+  "home_arm": [
+   -0.0136,
+   -0.3255,
+   -0.001,
+   0.5665,
+   -0.4655,
+   0.0088,
+   -0.8304
+  ],
+  "home_hand": {
+   "l_hj_gripper_1": 0.044
+  },
+  "gravity": {
+   "mode": "integral_droop",
+   "sim_gravity_disabled": false,
+   "gain": 0.05,
+   "limit": [
+    0.1,
+    0.1,
+    0.0675,
+    0.0675,
+    0.0175,
+    0.0175,
+    0.0175
+   ]
+  },
+  "sim_gains": {
+   "joints": [
+    "l_aj_1",
+    "l_aj_2",
+    "l_aj_3",
+    "l_aj_4",
+    "l_aj_5",
+    "l_aj_6",
+    "l_aj_7"
+   ],
+   "kp": [
+    70.0,
+    70.0,
+    70.0,
+    60.0,
+    10.0,
+    10.0,
+    10.0
+   ],
+   "kd": [
+    2.75,
+    2.5,
+    2.0,
+    2.0,
+    0.7,
+    0.6,
+    0.5
+   ]
+  }
+ },
+ "sides": {
+  "left": {
+   "side": "left",
+   "arm_joints": [
+    "l_aj_1",
+    "l_aj_2",
+    "l_aj_3",
+    "l_aj_4",
+    "l_aj_5",
+    "l_aj_6",
+    "l_aj_7"
+   ],
+   "hand_joints": [
+    "l_hj_gripper_1",
+    "l_hj_gripper_2"
+   ],
+   "ee_kind": "gripper",
+   "palm_body": "l_hl_gripper_base",
+   "tip_bodies": [],
+   "home_arm": [
+    -0.0136,
+    -0.3255,
+    -0.001,
+    0.5665,
+    -0.4655,
+    0.0088,
+    -0.8304
+   ],
+   "home_hand": {
+    "l_hj_gripper_1": 0.044
+   },
+   "pd_groups": [
+    "left_arm",
+    "left_gripper"
+   ],
+   "gravity": {
+    "mode": "integral_droop",
+    "sim_gravity_disabled": false,
+    "gain": 0.05,
+    "limit": [
+     0.1,
+     0.1,
+     0.0675,
+     0.0675,
+     0.0175,
+     0.0175,
+     0.0175
+    ]
+   },
+   "sim_gains": {
+    "joints": [
+     "l_aj_1",
+     "l_aj_2",
+     "l_aj_3",
+     "l_aj_4",
+     "l_aj_5",
+     "l_aj_6",
+     "l_aj_7"
+    ],
+    "kp": [
+     70.0,
+     70.0,
+     70.0,
+     60.0,
+     10.0,
+     10.0,
+     10.0
+    ],
+    "kd": [
+     2.75,
+     2.5,
+     2.0,
+     2.0,
+     0.7,
+     0.6,
+     0.5
+    ]
+   },
+   "fabric": {
+    "class_name": "OpenArmGripperLeftPoseFabric",
+    "robot_dir": "openarm_tesollo_sensor_left_gripper",
+    "params": "openarm_gripper_left_pose_params.yaml",
+    "world": {
+     "filename": "open_gripper_left_boxes_no_table"
+    },
+    "dt": 0.02,
+    "decimation": 2,
+    "damping": 10.0,
+    "max_objects": 8,
+    "joint_order": [
+     "l_aj_1",
+     "l_aj_2",
+     "l_aj_3",
+     "l_aj_4",
+     "l_aj_5",
+     "l_aj_6",
+     "l_aj_7"
+    ],
+    "home_q": [
+     -0.0136,
+     -0.3757,
+     -0.001,
+     0.9336,
+     -0.4655,
+     0.0003,
+     -0.3306
+    ],
+    "vel_ff_scale": 1.0,
+    "hand_vel_ff_scale": null,
+    "hand_sync": null,
+    "table_z": null,
+    "use_hand_repulsion": false,
+    "use_body_repulsion_pairs": false,
+    "home_source": "grasp_left_preset.LEFT_ARM_HOME_JOINT_POS (fabric default_config; robot reset = dump init_state)"
+   },
+   "palm": {
+    "convention": "absolute_palm",
+    "box_lo": [
+     0.22,
+     0.1,
+     0.16
+    ],
+    "box_hi": [
+     0.6,
+     0.43,
+     0.6
+    ],
+    "pos_rate_limit": 0.02,
+    "euler_center": [
+     0.317093862,
+     -1.4835298641951802,
+     3.094591725
+    ],
+    "max_pose_angle": 1.0471975511965976,
+    "rot_rate_limit": 0.05,
+    "delta_xyz": null,
+    "delta_rot_deg": null,
+    "anchor": null,
+    "rot_center_deg": null,
+    "rot_half_deg": null,
+    "home_palm": null,
+    "rot_rate_limit_deg": null
+   },
+   "hand": {
+    "decoder": "binary_gripper",
+    "joints": [
+     "l_hj_gripper_1"
+    ],
+    "params": {
+     "open": 0.044,
+     "close": 0.0,
+     "close_when": "a<0",
+     "force_open_when_gate_closed": true
+    }
+   },
+   "action_groups": [
+    "palm",
+    "gripper"
+   ]
+  }
+ },
+ "primary_side": "left",
+ "asset": null,
+ "control_only": false
+}

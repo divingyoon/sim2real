@@ -1,0 +1,68 @@
+# 우팔 + DG-5F — fake 플랜트: /dg5f_right/joint_states ← fake_hand_state_pub(--echo-topic /policy_control/joint_target),
+# /dg5f_right/tip_forces_xyz ← fake_tip_contact_pub, /joint_states ← fake_arm_bridge. 토픽 계약은 실기와 같다.
+robot: dg5f_right_fake
+joint_profile: robot_control/src/robot_control/profiles/openarm_tesollo.yaml
+sources:
+  arm:
+    type: joint_state
+    topic: /joint_states
+    joints: [r_aj_1, r_aj_2, r_aj_3, r_aj_4, r_aj_5, r_aj_6, r_aj_7]
+    naming: source
+    stale_sec: 0.5
+  ee:
+    type: joint_state
+    topic: /dg5f_right/joint_states
+    joints: [r_hj_thumb_1, r_hj_thumb_2, r_hj_thumb_3, r_hj_thumb_4,
+             r_hj_index_1, r_hj_index_2, r_hj_index_3, r_hj_index_4,
+             r_hj_middle_1, r_hj_middle_2, r_hj_middle_3, r_hj_middle_4,
+             r_hj_ring_1, r_hj_ring_2, r_hj_ring_3, r_hj_ring_4,
+             r_hj_pinky_1, r_hj_pinky_2, r_hj_pinky_3, r_hj_pinky_4]
+    naming: source
+    effort_unit: raw_current              # DG-5F effort 필드는 N·m 가 아니라 raw 전류
+    stale_sec: 0.5
+  tip_force:
+    type: float_array
+    topic: /dg5f_right/tip_forces_xyz     # tip_contact_pub: 15D tip-major, 팁 로컬 프레임 [N]
+    tips: [r_hl_thumb_tip, r_hl_index_tip, r_hl_middle_tip, r_hl_ring_tip, r_hl_pinky_tip]
+    axes: 3
+    stale_sec: 0.5
+  object:
+    type: pose
+    topic: /objects/cup_big_s100/pose
+    frame: base_link
+    mode: live                            # 우팔 게이트(close_gate)는 fabric 노드가 소유 → 부착 없음
+    stale_sec: 0.5
+  decoder_target:
+    type: joint_state
+    topic: /policy_control/joint_target   # 직전 시너지 손 목표 (canonical) → joint_err
+    joints: [r_hj_thumb_1, r_hj_thumb_2, r_hj_thumb_3, r_hj_thumb_4,
+             r_hj_index_1, r_hj_index_2, r_hj_index_3, r_hj_index_4,
+             r_hj_middle_1, r_hj_middle_2, r_hj_middle_3, r_hj_middle_4,
+             r_hj_ring_1, r_hj_ring_2, r_hj_ring_3, r_hj_ring_4,
+             r_hj_pinky_1, r_hj_pinky_2, r_hj_pinky_3, r_hj_pinky_4]
+    naming: canonical
+    required: false
+    stale_sec: 1.0
+  head:
+    type: joint_state
+    topic: /head/joint_states
+    joints: [head_j_pan, head_j_tilt]
+    naming: canonical
+    required: false
+    stale_sec: 1.0
+groups:
+  right_arm:
+    backend: arm_forward
+    side: right
+    jtc: right_joint_trajectory_controller
+    forward: [right_forward_position_controller, right_forward_velocity_controller, right_forward_effort_controller]
+  right_hand:
+    backend: dg5f_jtc
+    topic: /dg5f_right/dg5f_right_controller/joint_trajectory
+    pid_p: 1.5   # 2026-09-06 사용자 확정: DG-5F 손도 벤더 기본값만(구 실기 튜닝 4.5 폐기)
+table:
+  top: 0.205
+  clearance_min: -0.01   # sim(테이블 0.200)에서 손가락이 판에 닿는 파지 행동(−5.8 mm) 허용 — 우 실기는 재학습 후 확정
+  # 판 xy 범위 — live 노드 TABLE 상수(cx 0.375, cy -0.165, sx 0.550, sy 0.970). 밖에서는 여유 검사 면제
+  center_xy: [0.375, -0.165]
+  size_xy: [0.550, 0.970]

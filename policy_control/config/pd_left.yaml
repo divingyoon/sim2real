@@ -1,0 +1,32 @@
+# pd 노드 설정 — 좌팔(OpenArm 좌 + 스톡 그리퍼, 계약 logs/policy/left_v2B25). 플랜 §4.4.
+# 모든 숫자 knob 은 여기 있다. 태스크 값(홈·게인·droop gain/limit·vel_ff_scale)은 계약에서 읽는다.
+# 상대 경로는 rl_ws 루트 기준.
+side: left
+execute: false                 # true 여야 컨트롤러 토픽·controller_manager 를 건드린다
+pd_hz: 100.0                   # 재발행 주기
+ramp_speed: 0.1                # RAMPING(첫 목표까지) / goto_home 램프 [rad/s]
+watchdog_sec: 0.25             # joint_target 두절 → HOLD (CommandGate 와 동일)
+lead_sec: 0.1                  # max_lead = lead_vel·lead_sec (세트포인트가 실측을 앞서는 상한)
+lead_vel: 2.0                  # 프로필 관절 velocity 한계(openarm_tesollo.yaml) — 단계별 max_vel 이 아니라 이 값
+max_vel:                       # TRACKING 세트포인트 전진 상한 [rad/s], 단계 승인
+  reduced: 0.25
+  full: 2.0
+vel_ff_cap: 0.0                # q̇* 전향 상한 [rad/s], 단계 승인 0 → 0.5 → 2.0
+effort_cap: 20.0               # τ 합 상한 [N·m]; 초과 시 0 송출 + HOLD
+abort_tracking: 0.5            # max|세트포인트 − 실측| [rad] → HOLD  # ★sim 도 fabric 목표에 0.42 rad 뒤처진다(골든 j7 t=0) — 0.3 은 시작 즉시 HOLD. left 라이브 노드·STEP3 값
+release_zero_ticks: 5          # RELEASING 에서 q̇*=0·τ=0 송출 횟수
+blend_sec: 1.0                 # engage/release 토크 블렌드 시간
+settle:
+  clamp: 0.12                  # goto_home 정착 bias 상한 [rad]
+  tol: 0.01                    # 정착 판정 [rad]
+gravity:
+  mode: integral_droop         # 계약과 같아야 한다(gain/limit 은 계약 pd.gravity)
+gains:
+  yaml: urdf/vendor/openarm_description/config/arm/v10/control_gains.yaml
+  accept_sim_mismatch: false
+thermal:                       # |effort| > effort_nm 인 시간이 act_sec 누적되면 HOLD
+  - {joint: l_aj_7, effort_nm: 5.0, act_sec: 300}
+gripper:
+  close_overtravel_m: 0.008    # 닫기 지령 = 현재 개구 − 여유(과압착 가드)
+  max_vel: 0.2                 # [m/s]
+hand: null

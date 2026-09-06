@@ -1,0 +1,71 @@
+# left 팔 + Tesollo DG-5F-M (hdgp/assets/robot/openarm_dg5f-m_bi_rl, 09.05 기본 자산) — 실기.
+# 손은 자기 namespace(dg5f_left)의 controller_manager 에서 돌아 손 관절은 전역 /joint_states 에 나오지 않는다.
+# 손 관절 순서는 드라이버/프로필 순(finger-major). 한 팔씩 시험한다(플랜 §7).
+robot: dg5f_m_left_real
+joint_profiles:                          # 본 프로필(양팔 + 우손) + 좌손 보충(upstream 에 좌손이 들어오면 삭제)
+  - robot_control/src/robot_control/profiles/openarm_tesollo.yaml
+  - sim2real/config/openarm_tesollo_left_hand.yaml
+sources:
+  arm:
+    type: joint_state
+    topic: /joint_states
+    joints: [l_aj_1, l_aj_2, l_aj_3, l_aj_4, l_aj_5, l_aj_6, l_aj_7]
+    naming: source
+    stale_sec: 0.5
+  ee:
+    type: joint_state
+    topic: /dg5f_left/joint_states
+    joints: [l_hj_thumb_1, l_hj_thumb_2, l_hj_thumb_3, l_hj_thumb_4,
+             l_hj_index_1, l_hj_index_2, l_hj_index_3, l_hj_index_4,
+             l_hj_middle_1, l_hj_middle_2, l_hj_middle_3, l_hj_middle_4,
+             l_hj_ring_1, l_hj_ring_2, l_hj_ring_3, l_hj_ring_4,
+             l_hj_pinky_1, l_hj_pinky_2, l_hj_pinky_3, l_hj_pinky_4]
+    naming: source
+    effort_unit: raw_current              # DG-5F effort 필드는 N·m 가 아니라 raw 전류
+    stale_sec: 0.5
+  tip_force:
+    type: float_array
+    topic: /dg5f_left/tip_forces_xyz          # tip_contact_pub: 15D tip-major, 팁 로컬 프레임 [N]
+    tips: [l_hl_thumb_tip, l_hl_index_tip, l_hl_middle_tip, l_hl_ring_tip, l_hl_pinky_tip]
+    axes: 3
+    stale_sec: 0.5
+  object:
+    type: pose
+    topic: /objects/cup_big_s100/pose
+    frame: base_link
+    mode: live
+    stale_sec: 0.5
+  decoder_target:
+    type: joint_state
+    topic: /policy_control/joint_target   # 직전 시너지 손 목표 (canonical) → joint_err
+    joints: [l_hj_thumb_1, l_hj_thumb_2, l_hj_thumb_3, l_hj_thumb_4,
+             l_hj_index_1, l_hj_index_2, l_hj_index_3, l_hj_index_4,
+             l_hj_middle_1, l_hj_middle_2, l_hj_middle_3, l_hj_middle_4,
+             l_hj_ring_1, l_hj_ring_2, l_hj_ring_3, l_hj_ring_4,
+             l_hj_pinky_1, l_hj_pinky_2, l_hj_pinky_3, l_hj_pinky_4]
+    naming: canonical
+    required: false
+    stale_sec: 1.0
+  head:
+    type: joint_state
+    topic: /head/joint_states
+    joints: [head_j_pan, head_j_tilt]
+    naming: canonical
+    required: false
+    stale_sec: 1.0
+groups:
+  left_arm:
+    backend: arm_forward
+    side: left
+    jtc: left_joint_trajectory_controller
+    forward: [left_forward_position_controller, left_forward_velocity_controller, left_forward_effort_controller]
+  left_hand:
+    backend: dg5f_jtc
+    topic: /dg5f_left/dg5f_left_controller/joint_trajectory
+    namespace: dg5f_left                        # 드라이버 파라미터(PID p 적용) 대상
+    pid_p: 1.5   # 2026-09-06 사용자 확정: DG-5F 손도 벤더 기본값만(구 실기 튜닝 4.5 폐기)
+table:
+  top: 0.205
+  clearance_min: -0.01   # sim(테이블 0.200)에서 손가락이 판에 닿는 파지 행동(−5.8 mm) 허용 — 실기는 재학습 후 확정
+  center_xy: [0.375, -0.165]
+  size_xy: [0.550, 0.970]

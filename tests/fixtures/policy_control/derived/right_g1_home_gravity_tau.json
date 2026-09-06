@@ -1,0 +1,47 @@
+{
+ "source": "robot_control.kinematics chain_from_urdf+with_payload+gravity_torque, gravity_comp_node.py math",
+ "urdf": "openarm_tesollo_sensor_rl.urdf",
+ "tip_link": "r_hl_palm_ee",
+ "joints": [
+  "r_aj_1",
+  "r_aj_2",
+  "r_aj_3",
+  "r_aj_4",
+  "r_aj_5",
+  "r_aj_6",
+  "r_aj_7"
+ ],
+ "scale": [
+  1.1,
+  1.1,
+  1.1,
+  1.0,
+  1.1,
+  0.9,
+  1.1
+ ],
+ "payload": [
+  0.835,
+  -0.0045,
+  -0.01723,
+  0.22147
+ ],
+ "home_q": [
+  0.038,
+  0.4012,
+  0.6015,
+  0.9643,
+  0.0294,
+  0.706,
+  0.4213
+ ],
+ "tau_nm": [
+  8.881822502537043,
+  9.1514821889603,
+  3.1680818359405962,
+  8.446308237654566,
+  2.257755002633431,
+  0.011841827693240225,
+  3.4357524056524746
+ ]
+}

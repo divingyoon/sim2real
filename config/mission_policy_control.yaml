@@ -1,0 +1,132 @@
+# policy_control 4노드 실기 롤아웃 — 좌 v2B25 (플랜 §7). mission_run.py 가 읽는다.
+#   python3 scripts/ops/mission_run.py --mission config/mission_policy_control.yaml --plan
+#   실기 단계(touches_real)는 --execute 에 더해 --approve <id> 가 필수다(단계당 1회).
+# ★모든 노드/도구는 --execute / execute:=true 없이는 아무것도 발행하지 않는다.
+name: policy_control 좌 그리퍼 grasp 롤아웃
+loop_to: observe_only
+
+artifacts:
+  contract_left: logs/policy/left_v2B25/deploy_contract.json
+  robot_left: policy_control/config/robots/left_gripper_real.yaml
+  pd_left: policy_control/config/pd_left.yaml
+  shadow_left_npz: tests/fixtures/policy_control/left_v2B25_end.npz
+  gains_yaml: ../urdf/vendor/openarm_description/config/arm/v10/control_gains.yaml
+
+checkpoints:
+  left:
+    path: logs/policy/left_v2B25/nn/v2B25_tip30_ep2150.pth
+    md5: "27219429"
+    params: logs/policy/left_v2B25/params
+
+stages:
+  - id: preflight
+    title: 테스트·계약↔게인 대조·forward 컨트롤러 선언 확인 (읽기 전용)
+    artifacts: [contract_left, gains_yaml]
+
+  - id: bringup
+    title: 모터 전원 → CAN → openarm_bringup (robot_control) → head_home
+    needs: [preflight]
+    needs_why: 점검 전에 띄우면 오배선 상태로 모터가 돈다
+    touches_real: true
+
+  - id: pd_load
+    title: pd 노드 무발행 기동 (execute:=false) — forward 3종 load(inactive), status IDLE
+    needs: [bringup]
+    artifacts: [contract_left, robot_left, pd_left]
+    touches_real: true
+
+  - id: pd_selftest
+    title: engage → hold 10 s → 단일관절 ±0.05 rad @0.1 rad/s → release
+    needs: [pd_load]
+    checkpoints: [left]
+    touches_real: true
+    blocked: >-
+      pd 셀프테스트 도구(lowlevel_check TEST0/1/2 를 forward 백엔드로 이식)가 아직 없다 —
+      policy_control/tools/pd_selftest.py 작성 후 해제.
+
+  - id: goto_home
+    title: 계약 홈으로 0.1 rad/s 램프 (사전 FK 판 여유 검사)
+    needs: [pd_selftest]
+    checkpoints: [left]
+    touches_real: true
+
+  - id: shadow_pd
+    title: 기록 궤적 재생 (q̇* 유한차분, rate 0.25→1.0, vel_ff_cap 0→0.5→2.0 단계 승인)
+    needs: [goto_home]
+    artifacts: [shadow_left_npz]
+    touches_real: true
+
+  - id: observe_only
+    title: 4노드 라이브, pd 무발행 60 s — obs 분포·seq 결손·지연
+    needs: [shadow_pd]
+    checkpoints: [left]
+    touches_real: true
+
+  - id: policy_reduced
+    title: max_vel 0.25 · abort 0.3 rad · 1 에피소드
+    needs: [observe_only]
+    checkpoints: [left]
+    touches_real: true
+
+  - id: policy_full
+    title: 계약값 · 3 에피소드 (파지·리프트 2/3)
+    needs: [policy_reduced]
+    checkpoints: [left]
+    touches_real: true
+
+run:
+  preflight:
+    - note: policy_control 비GPU 테스트 전부
+      argv: [python3, -m, pytest, "{repo}/tests/policy_control", -q, -m, "not gpu", -p, "no:cacheprovider"]
+    - note: 계약 ↔ control_gains.yaml 게인 대조 (MISMATCH 면 rc 3)
+      argv: [python3, "{repo}/policy_control/tools/build_deploy_contract.py", --run, "{repo}/logs/policy/left_v2B25",
+             --grasp-band, v1, --gains, "{artifact:gains_yaml}", --out, "{artifact:contract_left}"]
+    - note: forward 컨트롤러 3종이 bringup 설정에 선언돼 있는지 (grep)
+      argv: [grep, -c, "left_forward_", "/home/user/rl_ws/robot_control/ros_ws/src/openarm_ros2/openarm_bringup/config/controllers/openarm_bimanual_controllers.yaml"]
+  bringup:
+    - note: ★CAN 설정 — sudo 필요, 사용자 셸에서
+      argv: [sudo, ip, link, set, can1, up, type, can, bitrate, "1000000", fd, "on"]
+      manual: true
+    - note: ★모터 전원을 먼저 켠 뒤 launch (robot_control bringup — forward 컨트롤러 선언 포함)
+      argv: [ros2, launch, openarm_bringup, openarm.bimanual.launch.py, "use_fake_hardware:=false",
+             "right_can_interface:=can0", "left_can_interface:=can1"]
+      manual: true
+    - note: 목 기준자세 + I게인 재적용
+      argv: [python3, "{repo}/scripts/head_home.py"]
+      execute_args: [--execute]
+  pd_load:
+    - note: pd 노드 무발행 기동 (execute:=false 기본). 별도 launch — 상류 크래시가 pd 를 끌고 내려가지 않게
+      argv: [ros2, launch, "{repo}/policy_control/launch/pd_controller.launch.py",
+             "contract:={artifact:contract_left}", "robot:={artifact:robot_left}", "pd_config:={artifact:pd_left}",
+             "execute:=false"]
+      background: true
+  goto_home:
+    - note: pd engage + goto_home (episode_ctl 단계 — 승인 pd_engage·pd_goto_home)
+      argv: [python3, "{repo}/policy_control/tools/episode_ctl.py", --steps, "0",
+             --approve, pd_engage, --approve, pd_goto_home]
+      execute_args: [--execute]
+  shadow_pd:
+    - note: 기록 궤적을 pd 로 재생 (rate 0.25 부터; 사용자 승인 후 0.5, 1.0)
+      argv: [python3, "{repo}/policy_control/tools/replay_to_pd.py", --npz, "{artifact:shadow_left_npz}", --env, "0",
+             --joints, "l_aj_1,l_aj_2,l_aj_3,l_aj_4,l_aj_5,l_aj_6,l_aj_7", --rate-scale, "0.25"]
+      execute_args: [--execute]
+  observe_only:
+    - note: 체인 3노드 (pd 는 pd_load 의 무발행 인스턴스 그대로)
+      argv: [ros2, launch, "{repo}/policy_control/launch/policy_chain.launch.py",
+             "contract:={artifact:contract_left}", "robot:={artifact:robot_left}", "device:=cuda:0"]
+      background: true
+    - note: 60 s 동안 status 를 CSV 로 (지연 p95 < 0.5·dt, seq 결손 0)
+      argv: [python3, "{repo}/policy_control/tools/status_to_csv.py", --seconds, "60", --policy-dt, "0.02",
+             --out, "{repo}/logs/policy_control/observe_only_status.csv"]
+  policy_reduced:
+    - note: pd 를 execute:=true·stage reduced 로 재기동 후 에피소드 1회 (전 단계 승인 필요)
+      argv: [python3, "{repo}/policy_control/tools/episode_ctl.py", --steps, "250",
+             --approve, pd_engage, --approve, pd_goto_home, --approve, ep_start]
+      execute_args: [--execute]
+    - note: 판정
+      argv: [python3, "{repo}/policy_control/tools/episode_judge.py", --contract, "{artifact:contract_left}", --seconds, "30"]
+  policy_full:
+    - note: 계약값(stage full) 3 에피소드 — 각 에피소드 승인
+      argv: [python3, "{repo}/policy_control/tools/episode_ctl.py", --steps, "250",
+             --approve, pd_engage, --approve, pd_goto_home, --approve, ep_start]
+      execute_args: [--execute]

@@ -1,0 +1,40 @@
+# fake 플랜트(도메인 97/96) 전용: pd_dg5f_m.yaml 과 동일하되 execute true + fake 완화값(lead·max_vel·vel_ff_cap).
+# pd 노드 설정 — 양팔 OpenArm + Tesollo DG-5F-M (자산 openarm_dg5f-m_bi_rl). 팔별 값은 {left: …, right: …} 매핑.
+side: both
+execute: true                  # ★fake 플랜트 전용 사본 — 실기 yaml(pd_dg5f_m.yaml)은 false
+pd_hz: 100.0
+ramp_speed: 0.1
+watchdog_sec: 0.25
+lead_sec: 0.25                 # ★fake: 0.5 rad — sim 은 lead 캡이 없다. 실기 yaml 은 단계 승인
+lead_vel: 2.0
+max_vel:
+  reduced: 0.25
+  full: 4.0                    # fabric 이 이미 속도를 묶는다 — 세트포인트 리미터는 그 위에
+vel_ff_cap: 2.0                # ★fake: q̇* 전향 켬(플랜트가 kd·q̇* 를 안다)
+effort_cap: 20.0
+abort_tracking: 0.5
+release_zero_ticks: 5
+blend_sec: 1.0
+settle:
+  clamp: 0.12
+  tol: 0.01
+gravity:
+  mode: model_tau_ff
+  urdf: hdgp/assets/robot/openarm_dg5f-m_bi_rl/openarm_dg5f-m_bi_rl.urdf
+  tip_link: {left: l_hl_palm_ee, right: r_hl_palm_ee}
+  scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+  payload:                     # 손가락 링크 합 1.763 kg @ palm_ee 프레임(열린 손) — pd_dg5f_m.yaml 과 동일
+    left:  [1.763, -0.02144, 0.00191, 0.00653]
+    right: [1.763, -0.02148, -0.00189, 0.00653]
+  cap_nm: 20.0
+gains:
+  yaml: urdf/vendor/openarm_description/config/arm/v10/control_gains.yaml
+  accept_sim_mismatch: false
+thermal:
+  - {joint: r_aj_7, effort_nm: 1.5, act_sec: 300}
+  - {joint: l_aj_7, effort_nm: 1.5, act_sec: 300}
+gripper: null
+hand:
+  pid_p: 1.5   # 2026-09-06 사용자 확정: DG-5F 손도 벤더 기본값만(구 실기 튜닝 4.5 폐기)
+  pid_d: 0.0
+  max_vel: 1.0

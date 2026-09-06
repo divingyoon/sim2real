@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """임시 fingertip 접촉(0) 퍼블리셔 — 실제 dg5f 손 드라이버와 병행용 stopgap.
 
-실제 dg5f_right_driver 는 /dg5f_right/joint_states 와 컨트롤러는 제공하지만
-/dg5f_right/contact_forces(정책 obs·start 게이트 필요) 는 발행하지 않는다.
+실제 dg5f_<side>_driver 는 /dg5f_<side>/joint_states 와 컨트롤러는 제공하지만
+/dg5f_<side>/contact_forces(정책 obs·start 게이트 필요) 는 발행하지 않는다.
 Tesollo tip F/T → 5 tip 접촉 변환 노드가 준비되기 전까지, 이 노드가 접촉 0 을
 발행해 게이트를 통과시키고 손 관절은 실제 드라이버 값을 쓰게 한다.
 
@@ -10,7 +10,7 @@ Tesollo tip F/T → 5 tip 접촉 변환 노드가 준비되기 전까지, 이 �
 실접촉이 필요하면 F/T 변환 노드로 교체할 것. [[grasp-v2-contact-obs-sim2real]]
 
 발행: <tip_force_xyz> 15D (5×3×0.0) + <tip_force_norm> 5D (5×0.0)
-      — 구성 프로필의 토픽을 쓴다(좌/우 공통).
+      — 구성 프로필(--robot)의 토픽, 또는 --namespace dg5f_<side> 의 /<ns>/tip_forces_xyz + /<ns>/contact_forces.
 """
 
 from __future__ import annotations
@@ -26,21 +26,24 @@ from pathlib import Path
 # ★`scripts/` 를 임포트 경로에 넣는다 — 이 파일은 거기서 한 단계 내려와 있다.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from robot_profile import load_robot_profile
-
 NUM_TIPS = 5
 
 
+def topics_for_namespace(namespace: str) -> tuple[str, str]:
+    ns = "/" + namespace.strip("/")
+    return f"{ns}/tip_forces_xyz", f"{ns}/contact_forces"
+
+
 class FakeTipContact(Node):
-    def __init__(self, profile, rate_hz: float) -> None:
+    def __init__(self, label: str, xyz_topic: str, norm_topic: str, rate_hz: float) -> None:
         super().__init__("fake_tip_contact_pub")
-        self.xyz_topic = profile.topics["tip_force_xyz"]
-        self.norm_topic = profile.topics["tip_force_norm"]
+        self.xyz_topic = xyz_topic
+        self.norm_topic = norm_topic
         self.pub_xyz = self.create_publisher(Float64MultiArray, self.xyz_topic, 10)
         self.pub_norm = self.create_publisher(Float64MultiArray, self.norm_topic, 10)
         self.create_timer(1.0 / rate_hz, self._tick)
         self.get_logger().info(
-            f"임시 접촉(0) 발행 [{profile.name}]: {self.xyz_topic} (15×0.0) + "
+            f"임시 접촉(0) 발행 [{label}]: {self.xyz_topic} (15×0.0) + "
             f"{self.norm_topic} ({NUM_TIPS}×0.0), {rate_hz:g}Hz\n"
             "  ⚠️ 실접촉 아님 — 실 dg5f joint_states 병행 stopgap(게이트 통과용)"
         )
@@ -56,13 +59,20 @@ class FakeTipContact(Node):
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--robot", default="tesollo_bi_s__right",
-                        help="config/robots 의 구성 프로필 이름")
+    parser.add_argument("--robot", default=None, help="config/robots 의 구성 프로필 이름 (기본 tesollo_bi_s__right)")
+    parser.add_argument("--namespace", default=None, help="dg5f_left | dg5f_right — 프로필 없이 namespace 토픽으로")
     parser.add_argument("--rate", type=float, default=30.0)
     args = parser.parse_args()
-    profile = load_robot_profile(args.robot)
+    if args.namespace:
+        label = args.namespace
+        xyz_topic, norm_topic = topics_for_namespace(args.namespace)
+    else:
+        from robot_profile import load_robot_profile
+
+        profile = load_robot_profile(args.robot or "tesollo_bi_s__right")
+        label, xyz_topic, norm_topic = profile.name, profile.topics["tip_force_xyz"], profile.topics["tip_force_norm"]
     rclpy.init()
-    node = FakeTipContact(profile, args.rate)
+    node = FakeTipContact(label, xyz_topic, norm_topic, args.rate)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
